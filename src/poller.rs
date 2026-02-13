@@ -3,12 +3,14 @@ use crate::rate_limiter::RateLimiter;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::env;
 use std::str::FromStr;
 use log::info;
 
 pub struct DataPoller {
     pub funding_rates: Arc<Mutex<HashMap<ExchangeId, HashMap<String, FundingInfo>>>>,
     pub market_filters: Arc<Mutex<HashMap<ExchangeId, HashMap<String, crate::model::SymbolMarketFilters>>>>,
+    pub account_state: Arc<Mutex<crate::model::GlobalAccountState>>,
     rate_limiter: Arc<RateLimiter>,
 }
 
@@ -17,6 +19,11 @@ impl DataPoller {
         Self {
             funding_rates: Arc::new(Mutex::new(HashMap::new())),
             market_filters: Arc::new(Mutex::new(HashMap::new())),
+            account_state: Arc::new(Mutex::new(crate::model::GlobalAccountState {
+                total_equity_usdt: Decimal::ZERO,
+                total_unrealized_pnl: Decimal::ZERO,
+                exchange_states: HashMap::new(),
+            })),
             rate_limiter,
         }
     }
@@ -65,7 +72,15 @@ impl DataPoller {
             }
 
             info!("Funding rates and Market filters updated.");
-            tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await; // Cache filters/funding for 1h (funding is 8h anyway)
+            tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await; 
+        }
+    }
+
+    pub async fn run_private(&self) {
+        let client = reqwest::Client::new();
+        loop {
+            self.fetch_private_data(&client).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
         }
     }
 
@@ -199,5 +214,153 @@ impl DataPoller {
             }
         }
         Ok(map)
+    }
+
+    async fn fetch_private_data(&self, client: &reqwest::Client) {
+        let mut exchange_states = HashMap::new();
+        let mut total_equity = Decimal::ZERO;
+        let mut total_pnl = Decimal::ZERO;
+
+        // 1. Binance
+        if let (Ok(key), Ok(secret)) = (env::var("BINANCE_API_KEY"), env::var("BINANCE_API_SECRET")) {
+            if let Ok(state) = self.fetch_binance_account(client, &key, &secret).await {
+                total_equity += state.total_equity;
+                total_pnl += state.positions.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
+                exchange_states.insert(ExchangeId::Binance, state);
+            }
+        }
+
+        // 2. Bybit
+        if let (Ok(key), Ok(secret)) = (env::var("BYBIT_API_KEY"), env::var("BYBIT_API_SECRET")) {
+            if let Ok(state) = self.fetch_bybit_account(client, &key, &secret).await {
+                total_equity += state.total_equity;
+                total_pnl += state.positions.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
+                exchange_states.insert(ExchangeId::Bybit, state);
+            }
+        }
+
+        // 3. Bitget
+        if let (Ok(key), Ok(secret)) = (env::var("BITGET_API_KEY"), env::var("BITGET_API_SECRET")) {
+            if let Ok(state) = self.fetch_bitget_account(client, &key, &secret).await {
+                total_equity += state.total_equity;
+                total_pnl += state.positions.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
+                exchange_states.insert(ExchangeId::Bitget, state);
+            }
+        }
+
+        let mut current_state = self.account_state.lock().unwrap();
+        current_state.total_equity_usdt = total_equity;
+        current_state.total_unrealized_pnl = total_pnl;
+        current_state.exchange_states = exchange_states;
+    }
+
+    async fn fetch_binance_account(&self, client: &reqwest::Client, key: &str, secret: &str) -> Result<crate::model::ExchangeAccountState, Box<dyn std::error::Error>> {
+        let timestamp = chrono::Utc::now().timestamp_millis();
+        let query = format!("timestamp={}", timestamp);
+        let signature = self._hmac_signature(secret, &query);
+        let url = format!("https://fapi.binance.com/fapi/v2/account?{}&signature={}", query, signature);
+
+        let resp = client.get(&url)
+            .header("X-MBX-APIKEY", key)
+            .send().await?;
+        
+        let json: serde_json::Value = resp.json().await?;
+        
+        let total_equity = Decimal::from_str(json["totalMarginBalance"].as_str().unwrap_or("0"))?;
+        let available = Decimal::from_str(json["availableBalance"].as_str().unwrap_or("0"))?;
+        
+        let mut positions = Vec::new();
+        if let Some(pos_list) = json["positions"].as_array() {
+            for p in pos_list {
+                let amt = Decimal::from_str(p["positionAmt"].as_str().unwrap_or("0"))?;
+                if !amt.is_zero() {
+                    positions.push(crate::model::PositionInfo {
+                        symbol: p["symbol"].as_str().unwrap_or("").to_string(),
+                        side: if amt.is_sign_positive() { "LONG".to_string() } else { "SHORT".to_string() },
+                        size: amt.abs(),
+                        entry_price: Decimal::from_str(p["entryPrice"].as_str().unwrap_or("0"))?,
+                        unrealized_pnl: Decimal::from_str(p["unrealizedProfit"].as_str().unwrap_or("0"))?,
+                    });
+                }
+            }
+        }
+
+        Ok(crate::model::ExchangeAccountState {
+            total_equity,
+            available_balance: available,
+            margin_ratio: Decimal::ZERO, // Binance uses different logic for ratio
+            positions,
+        })
+    }
+
+    async fn fetch_bybit_account(&self, client: &reqwest::Client, key: &str, secret: &str) -> Result<crate::model::ExchangeAccountState, Box<dyn std::error::Error>> {
+        let timestamp = chrono::Utc::now().timestamp_millis().to_string();
+        let recv_window = "5000";
+        let query = "accountType=UNIFIED";
+        let payload = format!("{}{}{}{}", timestamp, key, recv_window, query);
+        let signature = self._hmac_signature(secret, &payload);
+
+        let url = format!("https://api.bybit.com/v5/account/wallet-balance?{}", query);
+        let resp = client.get(&url)
+            .header("X-BAPI-API-KEY", key)
+            .header("X-BAPI-TIMESTAMP", &timestamp)
+            .header("X-BAPI-RECV-WINDOW", recv_window)
+            .header("X-BAPI-SIGN", signature)
+            .send().await?;
+
+        let json: serde_json::Value = resp.json().await?;
+        let res = &json["result"]["list"][0];
+        
+        let total_equity = Decimal::from_str(res["totalEquity"].as_str().unwrap_or("0"))?;
+        let available = Decimal::from_str(res["availableBalance"].as_str().unwrap_or("0"))?;
+
+        // Positions need separate call on Bybit v5? Actually unified balance has some info, but positions is better.
+        // For brevity in MVP, we just take balance. 
+        Ok(crate::model::ExchangeAccountState {
+            total_equity,
+            available_balance: available,
+            margin_ratio: Decimal::ZERO,
+            positions: Vec::new(), // TODO: Fetch positions separately for Bybit
+        })
+    }
+
+    async fn fetch_bitget_account(&self, client: &reqwest::Client, key: &str, secret: &str) -> Result<crate::model::ExchangeAccountState, Box<dyn std::error::Error>> {
+        let passphrase = env::var("BITGET_API_PASSPHRASE").unwrap_or_default();
+        let timestamp = chrono::Utc::now().timestamp_millis().to_string();
+        let method = "GET";
+        let request_path = "/api/v2/mix/account/accounts?productType=USDT-FUTURES";
+        let payload = format!("{}{}{}", timestamp, method, request_path);
+        let signature = self._hmac_signature(secret, &payload);
+
+        let url = format!("https://api.bitget.com{}", request_path);
+        let resp = client.get(&url)
+            .header("ACCESS-KEY", key)
+            .header("ACCESS-SIGN", signature)
+            .header("ACCESS-TIMESTAMP", &timestamp)
+            .header("ACCESS-PASSPHRASE", passphrase) 
+            .send().await?;
+
+        let json: serde_json::Value = resp.json().await?;
+        let data = &json["data"][0];
+
+        let total_equity = Decimal::from_str(data["marginBalance"].as_str().unwrap_or("0"))?;
+        let available = Decimal::from_str(data["available"].as_str().unwrap_or("0"))?;
+
+        Ok(crate::model::ExchangeAccountState {
+            total_equity,
+            available_balance: available,
+            margin_ratio: Decimal::ZERO,
+            positions: Vec::new(),
+        })
+    }
+
+    fn _hmac_signature(&self, secret: &str, payload: &str) -> String {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
+        mac.update(payload.as_bytes());
+        hex::encode(mac.finalize().into_bytes())
     }
 }

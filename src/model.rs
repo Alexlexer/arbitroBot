@@ -1,6 +1,7 @@
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub enum RiskError {
@@ -95,6 +96,30 @@ impl UnifiedTicker {
     pub fn best_ask(&self) -> Option<(Decimal, Decimal)> {
         self.asks.first().cloned()
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PositionInfo {
+    pub symbol: String,
+    pub side: String, // "LONG" or "SHORT"
+    pub size: Decimal,
+    pub entry_price: Decimal,
+    pub unrealized_pnl: Decimal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExchangeAccountState {
+    pub total_equity: Decimal,
+    pub available_balance: Decimal,
+    pub margin_ratio: Decimal, // e.g. 0.05 for 5%
+    pub positions: Vec<PositionInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GlobalAccountState {
+    pub total_equity_usdt: Decimal,
+    pub total_unrealized_pnl: Decimal,
+    pub exchange_states: HashMap<ExchangeId, ExchangeAccountState>,
 }
 
 #[derive(Debug, Clone)]

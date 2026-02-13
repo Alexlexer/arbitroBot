@@ -32,12 +32,18 @@ async fn main() {
     let poller = poller::DataPoller::new(rate_limiter.clone());
     let funding_rates = poller.funding_rates.clone();
     let market_filters = poller.market_filters.clone();
-    let notifier = Arc::new(notifier::TelegramNotifier::new());
+    let account_state = poller.account_state.clone();
+    let notifier = Arc::new(notifier::TelegramNotifier::new(account_state.clone()));
     
-    // Spawn Funding Poller
+    // Spawn Data Pollers
     let poller_handle = Arc::new(poller);
+    let p_pub = poller_handle.clone();
     tokio::spawn(async move {
-        poller_handle.run().await;
+        p_pub.run().await;
+    });
+    let p_priv = poller_handle.clone();
+    tokio::spawn(async move {
+        p_priv.run_private().await;
     });
 
     // Spawn Telegram Listener
@@ -60,6 +66,7 @@ async fn main() {
     });
 
     // Run Aggregator (Main Thread)
-    let mut aggregator = Aggregator::new(rx, exec_tx, log_buffer, risk_manager, funding_rates, market_filters, notifier);
+    let account_state = poller_handle.account_state.clone();
+    let mut aggregator = Aggregator::new(rx, exec_tx, log_buffer, risk_manager, funding_rates, market_filters, account_state, notifier);
     aggregator.run().await;
 }
