@@ -13,6 +13,7 @@ pub struct Aggregator {
     log_buffer: Arc<Mutex<VecDeque<String>>>,
     risk_manager: RiskManager,
     funding_rates: Arc<Mutex<HashMap<ExchangeId, HashMap<String, FundingInfo>>>>,
+    market_filters: Arc<Mutex<HashMap<ExchangeId, HashMap<String, crate::model::SymbolMarketFilters>>>>,
     notifier: Arc<TelegramNotifier>,
     // Symbol -> Exchange -> Ticker
     market_data: HashMap<String, HashMap<ExchangeId, UnifiedTicker>>,
@@ -25,6 +26,7 @@ impl Aggregator {
         log_buffer: Arc<Mutex<VecDeque<String>>>,
         risk_manager: RiskManager,
         funding_rates: Arc<Mutex<HashMap<ExchangeId, HashMap<String, FundingInfo>>>>,
+        market_filters: Arc<Mutex<HashMap<ExchangeId, HashMap<String, crate::model::SymbolMarketFilters>>>>,
         notifier: Arc<TelegramNotifier>,
     ) -> Self {
         Self {
@@ -33,6 +35,7 @@ impl Aggregator {
             log_buffer,
             risk_manager,
             funding_rates,
+            market_filters,
             notifier,
             market_data: HashMap::new(),
         }
@@ -119,6 +122,8 @@ impl Aggregator {
                         status_map.insert(long.exchange, AssetStatus { can_deposit: true, can_withdraw: true, is_active: true });
                         status_map.insert(short.exchange, AssetStatus { can_deposit: true, can_withdraw: true, is_active: true });
 
+                        let r_filters = self.market_filters.lock().unwrap();
+
                         // Validate
                         match self.risk_manager.validate(&ArbitrageOpportunity {
                             symbol: symbol.to_string(),
@@ -128,7 +133,7 @@ impl Aggregator {
                             short_price: b_short.0,
                             spread_pct: net_spread,
                             timestamp: chrono::Utc::now().timestamp_millis(),
-                        }, &depth_map, &funding_map, &status_map, target_volume).await {
+                        }, &depth_map, &funding_map, &status_map, &r_filters, target_volume).await {
                             Ok(_) => {
                                 let opp = ArbitrageOpportunity {
                                     symbol: symbol.to_string(),

@@ -33,6 +33,7 @@ async fn main() {
     let rate_limiter = Arc::new(RateLimiter::new());
     let poller = poller::DataPoller::new(rate_limiter.clone());
     let funding_rates = poller.funding_rates.clone();
+    let market_filters = poller.market_filters.clone();
     let notifier = Arc::new(notifier::TelegramNotifier::new());
     
     // Spawn Funding Poller
@@ -61,6 +62,6 @@ async fn main() {
     });
 
     // Run Aggregator (Main Thread)
-    let mut aggregator = Aggregator::new(rx, exec_tx, log_buffer, risk_manager, funding_rates, notifier);
+    let mut aggregator = Aggregator::new(rx, exec_tx, log_buffer, risk_manager, funding_rates, market_filters, notifier);
     aggregator.run().await;
 }

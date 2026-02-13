@@ -9,6 +9,7 @@ pub enum RiskError {
     WalletDisabled(String),
     PrecisionMismatch(String),
     PriceDrift(String),
+    MinNotionalFilter(String),
     ExchangeError(String),
 }
 
@@ -20,6 +21,7 @@ impl fmt::Display for RiskError {
             RiskError::WalletDisabled(msg) => write!(f, "Wallet Risk: {}", msg),
             RiskError::PrecisionMismatch(msg) => write!(f, "Precision Risk: {}", msg),
             RiskError::PriceDrift(msg) => write!(f, "Price Drift: {}", msg),
+            RiskError::MinNotionalFilter(msg) => write!(f, "Min Notional Risk: {}", msg),
             RiskError::ExchangeError(msg) => write!(f, "Exchange Error: {}", msg),
         }
     }
@@ -42,6 +44,11 @@ pub struct AssetStatus {
     pub can_deposit: bool,
     pub can_withdraw: bool,
     pub is_active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolMarketFilters {
+    pub min_notional: Decimal, // Minimum USDT value (or quote currency)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
