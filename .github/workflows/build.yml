@@ -31,16 +31,12 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
 
-    - name: Install cargo-deb (Linux only)
-      if: matrix.os == 'ubuntu-latest'
-      run: cargo install cargo-deb
-
     - name: Build
       run: cargo build --release --verbose
 
-    - name: Package .deb (Linux only)
+    - name: Install cargo-deb (Linux only)
       if: matrix.os == 'ubuntu-latest'
-      run: cargo deb
+      run: cargo install cargo-deb && cargo deb
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
@@ -54,6 +50,9 @@ jobs:
     name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
+    # Добавляем права доступа, чтобы избежать 403 ошибки
+    permissions:
+      contents: write
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     steps:
       - name: Download Windows Artifact
@@ -76,8 +75,8 @@ jobs:
             echo "name=Latest Build (Auto-updated)" >> $GITHUB_OUTPUT
             echo "prerelease=true" >> $GITHUB_OUTPUT
           else
-            echo "tag=${github_ref#refs/tags/}" >> $GITHUB_OUTPUT
-            echo "name=Release ${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+            echo "name=Release ${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
             echo "prerelease=false" >> $GITHUB_OUTPUT
           fi
         shell: bash
@@ -88,10 +87,11 @@ jobs:
           tag_name: ${{ steps.vars.outputs.tag }}
           name: ${{ steps.vars.outputs.name }}
           prerelease: ${{ steps.vars.outputs.prerelease }}
+          # Используем подстановочный знак, так как скачивание артефактов может создавать вложенные папки
           files: |
-            ./release/arbit_hub.exe
-            ./release/arbit_hub
-            ./release/*.deb
+            ./release/**/arbit_hub.exe
+            ./release/**/arbit_hub
+            ./release/**/*.deb
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
