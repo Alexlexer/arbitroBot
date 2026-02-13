@@ -33,7 +33,10 @@ impl RiskManager {
         // 2. Check Timestamp Drift (Stale Data Guard)
         self.check_timestamp_drift(ticker_timestamps, 500)?;
 
-        // 3. Check Min Notional Guard
+        // 3. Check Trading Status
+        self.check_trading_status(opp, market_filters)?;
+
+        // 4. Check Min Notional Guard
         self.check_min_notional(opp, market_filters, target_volume_usdt)?;
 
         // 3. Check Liquidity / Slippage
@@ -167,6 +170,39 @@ impl RiskManager {
                 )));
             }
         }
+        Ok(())
+    }
+
+    /// Trading Status Check: Ensure symbol is active and not on maintenance
+    fn check_trading_status(
+        &self,
+        opp: &ArbitrageOpportunity,
+        market_filters: &HashMap<ExchangeId, HashMap<String, crate::model::SymbolMarketFilters>>,
+    ) -> Result<(), RiskError> {
+        // Check Long Exchange
+        if let Some(exchange_filters) = market_filters.get(&opp.long_exchange) {
+            if let Some(filter) = exchange_filters.get(&opp.symbol) {
+                if !filter.is_trading {
+                    return Err(RiskError::ExchangeError(format!(
+                        "{} symbol {} is not in TRADING mode",
+                        opp.long_exchange, opp.symbol
+                    )));
+                }
+            }
+        }
+
+        // Check Short Exchange
+        if let Some(exchange_filters) = market_filters.get(&opp.short_exchange) {
+            if let Some(filter) = exchange_filters.get(&opp.symbol) {
+                if !filter.is_trading {
+                    return Err(RiskError::ExchangeError(format!(
+                        "{} symbol {} is not in TRADING mode",
+                        opp.short_exchange, opp.symbol
+                    )));
+                }
+            }
+        }
+
         Ok(())
     }
 

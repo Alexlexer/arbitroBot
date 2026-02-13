@@ -77,12 +77,17 @@ impl DataPoller {
         if let Some(symbols) = json["symbols"].as_array() {
             for s in symbols {
                 let symbol_name = s["symbol"].as_str().unwrap_or("");
+                let is_trading = s["status"].as_str() == Some("TRADING");
+                
                 if let Some(filters) = s["filters"].as_array() {
                     for f in filters {
                         if f["filterType"] == "NOTIONAL" || f["filterType"] == "MIN_NOTIONAL" {
-                            let min_notional = f["minNotional"].as_str().or(f["notional"].as_str()).unwrap_or("0");
-                            if let Ok(val) = Decimal::from_str(min_notional) {
-                                map.insert(symbol_name.to_string(), crate::model::SymbolMarketFilters { min_notional: val });
+                            let min_notional_str = f["minNotional"].as_str().or(f["notional"].as_str()).unwrap_or("0");
+                            if let Ok(val) = Decimal::from_str(min_notional_str) {
+                                map.insert(symbol_name.to_string(), crate::model::SymbolMarketFilters { 
+                                    min_notional: val,
+                                    is_trading,
+                                });
                             }
                         }
                     }
@@ -100,9 +105,13 @@ impl DataPoller {
         if let Some(list) = json["result"]["list"].as_array() {
             for item in list {
                 if let Some(s) = item["symbol"].as_str() {
+                    let is_trading = item["status"].as_str() == Some("Trading");
                     let min_notional = item["minNotionalValue"].as_str().unwrap_or("0");
                     if let Ok(val) = Decimal::from_str(min_notional) {
-                        map.insert(s.to_string(), crate::model::SymbolMarketFilters { min_notional: val });
+                        map.insert(s.to_string(), crate::model::SymbolMarketFilters { 
+                            min_notional: val,
+                            is_trading,
+                        });
                     }
                 }
             }
@@ -118,9 +127,13 @@ impl DataPoller {
         if let Some(data) = json["data"].as_array() {
             for item in data {
                 if let Some(s) = item["symbol"].as_str() {
+                    let is_trading = item["symbolStatus"].as_str() == Some("normal");
                     let min_notional = item["minNotionalUsdt"].as_str().unwrap_or("0");
                     if let Ok(val) = Decimal::from_str(min_notional) {
-                        map.insert(s.to_string(), crate::model::SymbolMarketFilters { min_notional: val });
+                        map.insert(s.to_string(), crate::model::SymbolMarketFilters { 
+                            min_notional: val,
+                            is_trading,
+                        });
                     }
                 }
             }
