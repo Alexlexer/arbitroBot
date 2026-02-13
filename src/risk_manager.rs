@@ -22,13 +22,17 @@ impl RiskManager {
         depth_map: &HashMap<ExchangeId, OrderBookDepth>,
         funding_map: &HashMap<ExchangeId, FundingInfo>,
         status_map: &HashMap<ExchangeId, AssetStatus>,
+        market_filters: &HashMap<ExchangeId, HashMap<String, crate::model::SymbolMarketFilters>>,
         target_volume_usdt: Decimal, 
     ) -> Result<(), RiskError> {
         
         // 1. Check Wallet Status
         self.check_wallet_status(opp, status_map)?;
 
-        // 2. Check Liquidity / Slippage
+        // 2. Check Min Notional Guard
+        self.check_min_notional(opp, market_filters, target_volume_usdt)?;
+
+        // 3. Check Liquidity / Slippage
         self.check_liquidity(opp, depth_map, target_volume_usdt)?;
 
         // 3. Check Funding Rate
@@ -140,6 +144,40 @@ impl RiskManager {
                 return Err(RiskError::WalletDisabled(format!("{} wallet disabled/restricted", opp.short_exchange)));
             }
         }
+        Ok(())
+    }
+
+    /// Min Notional Guard: Block if order value < Exchange Minimum
+    fn check_min_notional(
+        &self,
+        opp: &ArbitrageOpportunity,
+        market_filters: &HashMap<ExchangeId, HashMap<String, crate::model::SymbolMarketFilters>>,
+        target_volume_usdt: Decimal,
+    ) -> Result<(), RiskError> {
+        // Check Long Exchange
+        if let Some(exchange_filters) = market_filters.get(&opp.long_exchange) {
+            if let Some(filter) = exchange_filters.get(&opp.symbol) {
+                if target_volume_usdt < filter.min_notional {
+                    return Err(RiskError::MinNotionalFilter(format!(
+                        "{} order value ${} < Min Notional ${}",
+                        opp.long_exchange, target_volume_usdt, filter.min_notional
+                    )));
+                }
+            }
+        }
+
+        // Check Short Exchange
+        if let Some(exchange_filters) = market_filters.get(&opp.short_exchange) {
+            if let Some(filter) = exchange_filters.get(&opp.symbol) {
+                if target_volume_usdt < filter.min_notional {
+                    return Err(RiskError::MinNotionalFilter(format!(
+                        "{} order value ${} < Min Notional ${}",
+                        opp.short_exchange, target_volume_usdt, filter.min_notional
+                    )));
+                }
+            }
+        }
+
         Ok(())
     }
 
