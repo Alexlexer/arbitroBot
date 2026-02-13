@@ -25,7 +25,7 @@ jobs:
             asset_name: arbit_hub.exe
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -34,7 +34,7 @@ jobs:
       run: cargo build --release --verbose
 
     - name: Upload Artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.artifact_name }}
         path: target/release/${{ matrix.asset_name }}
