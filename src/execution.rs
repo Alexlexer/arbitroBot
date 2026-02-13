@@ -1,16 +1,19 @@
 use crate::model::{ArbitrageOpportunity, ExchangeId};
-use log::{info, warn};
+use crate::rate_limiter::RateLimiter;
+use log::{info, warn, error};
 use rust_decimal::Decimal;
+use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
 use tokio::time::{sleep, Duration};
 
 pub struct ExecutionActor {
     rx: Receiver<ArbitrageOpportunity>,
+    rate_limiter: Arc<RateLimiter>,
 }
 
 impl ExecutionActor {
-    pub fn new(rx: Receiver<ArbitrageOpportunity>) -> Self {
-        Self { rx }
+    pub fn new(rx: Receiver<ArbitrageOpportunity>, rate_limiter: Arc<RateLimiter>) -> Self {
+        Self { rx, rate_limiter }
     }
 
     pub async fn run(&mut self) {
@@ -27,26 +30,19 @@ impl ExecutionActor {
             opp.symbol, opp.long_exchange, opp.symbol, opp.short_exchange, opp.spread_pct
         );
 
-        // EXECUTION LOGIC with Latency Guard
-        /*
-        let (long_res, short_res) = tokio::join!(
-            self.place_order(opp.long_exchange, &opp.symbol, "BUY", opp.long_price),
-            self.place_order(opp.short_exchange, &opp.symbol, "SELL", opp.short_price)
-        );
-
-        match (long_res, short_res) {
-            (Ok(_), Ok(_)) => info!("✅ ARBITRAGE SUCCESS: Both legs executed."),
-            (Ok(_), Err(e)) => {
-                error!("⚠️ PARTIAL FILL (Long OK, Short FAIL): {}. Closing Long leg immediately...", e);
-                let _ = self.place_order(opp.long_exchange, &opp.symbol, "SELL", opp.long_price).await;
-            }
-            (Err(e), Ok(_)) => {
-                error!("⚠️ PARTIAL FILL (Long FAIL, Short OK): {}. Closing Short leg immediately...", e);
-                let _ = self.place_order(opp.short_exchange, &opp.symbol, "BUY", opp.short_price).await;
-            }
-            (Err(e1), Err(e2)) => error!("❌ BOTH LEGS FAILED: {} | {}", e1, e2),
+        // Check Rate Limits Before Multi-Leg Execution
+        if !self.rate_limiter.check_limit(opp.long_exchange, true, 1.0).await {
+            error!("Execution Aborted: {} Order Rate Limit Exceeded", opp.long_exchange);
+            return;
         }
-        */
+        if !self.rate_limiter.check_limit(opp.short_exchange, true, 1.0).await {
+            error!("Execution Aborted: {} Order Rate Limit Exceeded", opp.short_exchange);
+            return;
+        }
+
+        // Mock success for now
+        let _ = self.place_order(opp.long_exchange, &opp.symbol, "BUY", opp.long_price).await;
+        let _ = self.place_order(opp.short_exchange, &opp.symbol, "SELL", opp.short_price).await;
 
         info!("(Execution Disabled) - Simulated Latency Guard: OK");
     }

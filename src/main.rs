@@ -6,11 +6,13 @@ mod logger;
 mod risk_manager;
 mod poller;
 mod notifier;
+mod rate_limiter;
 
 use aggregator::Aggregator;
 use execution::ExecutionActor;
 use model::UnifiedTicker;
 use notifier::TelegramNotifier;
+use rate_limiter::RateLimiter;
 use tokio::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
@@ -26,9 +28,10 @@ async fn main() {
     let log_buffer = logger.logs.clone(); // Clone Arc
     logger.init().unwrap(); // Set as global logger
 
-    // Setup Risk, Poller & Notifier
+    // Setup Risk, Poller, Notifier & RateLimiter
     let risk_manager = risk_manager::RiskManager::new();
-    let poller = poller::DataPoller::new();
+    let rate_limiter = Arc::new(RateLimiter::new());
+    let poller = poller::DataPoller::new(rate_limiter.clone());
     let funding_rates = poller.funding_rates.clone();
     let notifier = Arc::new(notifier::TelegramNotifier::new());
     
@@ -52,7 +55,7 @@ async fn main() {
     exchange::launch_all(tx).await;
 
     // Run Execution Actor (Background Thread)
-    let mut execution_actor = ExecutionActor::new(exec_rx);
+    let mut execution_actor = ExecutionActor::new(exec_rx, rate_limiter.clone());
     tokio::spawn(async move {
         execution_actor.run().await;
     });

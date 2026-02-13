@@ -1,18 +1,21 @@
 use crate::model::{ExchangeId, FundingInfo};
+use crate::rate_limiter::RateLimiter;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::str::FromStr;
-use log::{error, info};
+use log::{error, info, warn};
 
 pub struct DataPoller {
     pub funding_rates: Arc<Mutex<HashMap<ExchangeId, HashMap<String, FundingInfo>>>>,
+    rate_limiter: Arc<RateLimiter>,
 }
 
 impl DataPoller {
-    pub fn new() -> Self {
+    pub fn new(rate_limiter: Arc<RateLimiter>) -> Self {
         Self {
             funding_rates: Arc::new(Mutex::new(HashMap::new())),
+            rate_limiter,
         }
     }
 
@@ -22,18 +25,30 @@ impl DataPoller {
             let mut new_rates = HashMap::new();
 
             // 1. Fetch Binance Funding
-            if let Ok(rates) = self.fetch_binance_funding(&client).await {
-                new_rates.insert(ExchangeId::Binance, rates);
+            if self.rate_limiter.check_limit(ExchangeId::Binance, false, 1.0).await {
+                if let Ok(rates) = self.fetch_binance_funding(&client).await {
+                    new_rates.insert(ExchangeId::Binance, rates);
+                }
+            } else {
+                warn!("Skipping Binance funding poll due to rate limit.");
             }
 
             // 2. Fetch Bybit Funding
-            if let Ok(rates) = self.fetch_bybit_funding(&client).await {
-                new_rates.insert(ExchangeId::Bybit, rates);
+            if self.rate_limiter.check_limit(ExchangeId::Bybit, false, 1.0).await {
+                if let Ok(rates) = self.fetch_bybit_funding(&client).await {
+                    new_rates.insert(ExchangeId::Bybit, rates);
+                }
+            } else {
+                warn!("Skipping Bybit funding poll due to rate limit.");
             }
 
             // 3. Fetch Bitget Funding
-            if let Ok(rates) = self.fetch_bitget_funding(&client).await {
-                new_rates.insert(ExchangeId::Bitget, rates);
+            if self.rate_limiter.check_limit(ExchangeId::Bitget, false, 1.0).await {
+                if let Ok(rates) = self.fetch_bitget_funding(&client).await {
+                    new_rates.insert(ExchangeId::Bitget, rates);
+                }
+            } else {
+                warn!("Skipping Bitget funding poll due to rate limit.");
             }
 
             {
