@@ -2,12 +2,16 @@ use log::{error, info};
 use reqwest::Client;
 use std::env;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, PartialEq)]
 enum UserState {
     Idle,
     AwaitingPassword,
+    AwaitingExchangeSelection,
+    AwaitingApiKey(crate::model::ExchangeId),
+    AwaitingApiSecret(crate::model::ExchangeId, String), // Exchange, Key
+    AwaitingBitgetPassphrase(crate::model::ExchangeId, String, String), // Exchange, Key, Secret
 }
 
 pub struct TelegramNotifier {
@@ -16,11 +20,12 @@ pub struct TelegramNotifier {
     chat_id: Mutex<String>,
     password: String,
     states: Mutex<HashMap<String, UserState>>,
+    account_state: Arc<Mutex<crate::model::GlobalAccountState>>,
     enabled: bool,
 }
 
 impl TelegramNotifier {
-    pub fn new() -> Self {
+    pub fn new(account_state: Arc<Mutex<crate::model::GlobalAccountState>>) -> Self {
         let token = env::var("TELEGRAM_BOT_TOKEN").unwrap_or_default();
         let chat_id = env::var("TELEGRAM_CHAT_ID").unwrap_or_default();
         let password = env::var("BOT_PASSWORD").unwrap_or_else(|_| "admin123".to_string());
@@ -38,6 +43,7 @@ impl TelegramNotifier {
             chat_id: Mutex::new(chat_id),
             password,
             states: Mutex::new(HashMap::new()),
+            account_state,
             enabled,
         }
     }
@@ -136,6 +142,55 @@ impl TelegramNotifier {
                     }
                 }
             }
+            UserState::AwaitingExchangeSelection => {
+                let exchange_opt = match text.to_lowercase().as_str() {
+                    "binance" => Some(crate::model::ExchangeId::Binance),
+                    "bybit" => Some(crate::model::ExchangeId::Bybit),
+                    "bitget" => Some(crate::model::ExchangeId::Bitget),
+                    _ => None,
+                };
+
+                if let Some(ex) = exchange_opt {
+                    {
+                        let mut s_map = self.states.lock().unwrap();
+                        s_map.insert(chat_id.to_string(), UserState::AwaitingApiKey(ex));
+                    }
+                    self.send_to_chat(chat_id, &format!("⚙️ *Setup: {}*\nPlease enter your **API Key**:", ex)).await;
+                } else {
+                   self.send_to_chat(chat_id, "❌ *Invalid Exchange.*\nPlease type: Binance, Bybit, or Bitget (or type /cancel):").await;
+                }
+            }
+            UserState::AwaitingApiKey(ex) => {
+                {
+                    let mut s_map = self.states.lock().unwrap();
+                    s_map.insert(chat_id.to_string(), UserState::AwaitingApiSecret(ex, text.to_string()));
+                }
+                self.send_to_chat(chat_id, "🔐 *Setup: API Secret*\nPlease enter your **API Secret** (it will NOT be shown in logs):").await;
+            }
+            UserState::AwaitingApiSecret(ex, key) => {
+                if ex == crate::model::ExchangeId::Bitget {
+                    {
+                        let mut s_map = self.states.lock().unwrap();
+                        s_map.insert(chat_id.to_string(), UserState::AwaitingBitgetPassphrase(ex, key, text.to_string()));
+                    }
+                    self.send_to_chat(chat_id, "🔑 *Setup: Passphrase (Bitget)*\nPlease enter your API Passphrase:").await;
+                } else {
+                    self.save_credentials(ex, &key, text, "").await;
+                    {
+                        let mut s_map = self.states.lock().unwrap();
+                        s_map.insert(chat_id.to_string(), UserState::Idle);
+                    }
+                    self.send_to_chat(chat_id, &format!("✅ *Credentials saved for {}!* \nBot will now start polling your private data.", ex)).await;
+                }
+            }
+            UserState::AwaitingBitgetPassphrase(ex, key, secret) => {
+                self.save_credentials(ex, &key, &secret, text).await;
+                {
+                    let mut s_map = self.states.lock().unwrap();
+                    s_map.insert(chat_id.to_string(), UserState::Idle);
+                }
+                self.send_to_chat(chat_id, &format!("✅ *Credentials saved for {}!* \nBot will now start polling your private data.", ex)).await;
+            }
             UserState::Idle => {
                 self.handle_command(chat_id, text).await;
             }
@@ -179,14 +234,48 @@ impl TelegramNotifier {
             return;
         }
 
+        if text.starts_with("/setup") {
+            {
+                let mut s_map = self.states.lock().unwrap();
+                s_map.insert(chat_id.to_string(), UserState::AwaitingExchangeSelection);
+            }
+            self.send_to_chat(chat_id, "🛠 *API Hookup Wizard*\nWhich exchange do you want to configure?\n\nType: **Binance**, **Bybit**, or **Bitget**").await;
+            return;
+        }
+
+        if text.starts_with("/cancel") {
+            {
+                let mut s_map = self.states.lock().unwrap();
+                s_map.insert(chat_id.to_string(), UserState::Idle);
+            }
+            self.send_to_chat(chat_id, "🚫 Setup cancelled.").await;
+            return;
+        }
+
         match text {
             "/start" => {
-                let msg = format!("👋 *Arbitrage Hub Bot*\n\nAvailable commands:\n/login <pass> - Direct login\n/status - System status\n/ping - Simple check");
+                let msg = format!("👋 *Arbitrage Hub Bot*\n\nAvailable commands:\n/login <pass> - Direct login\n/setup - Configure API Keys\n/status - System status\n/ping - Simple check");
                 self.send_to_chat(chat_id, &msg).await;
             }
             "/status" => {
-                let msg = "📊 *System Status*\n\nUptime: Running\nThreshold: 5.0%\nExchanges: 3/3";
-                self.send_to_chat(chat_id, msg).await;
+                let msg = {
+                    let state_lock = self.account_state.lock().unwrap();
+                    let mut exchange_summary = String::new();
+                    for (ex, s) in &state_lock.exchange_states {
+                        exchange_summary.push_str(&format!("🔹 *{}*: ${:.2} ({} pos)\n", ex, s.total_equity, s.positions.len()));
+                    }
+
+                    format!(
+                        "📊 *System Status*\n\n\
+                        💰 *Total Equity*: `${:.2} USDT`\n\
+                        📉 *Global PnL*: `${:.2}`\n\n\
+                        *Exchanges*:\n{}\n\
+                        Threshold: 5.0%\n\
+                        Uptime: Running",
+                        state_lock.total_equity_usdt, state_lock.total_unrealized_pnl, exchange_summary
+                    )
+                };
+                self.send_to_chat(chat_id, &msg).await;
             }
             "/ping" => {
                 self.send_to_chat(chat_id, "🏓 Pong!").await;
@@ -196,6 +285,35 @@ impl TelegramNotifier {
                     self.send_to_chat(chat_id, "❓ Unknown command. Try /start").await;
                 }
             }
+        }
+    }
+
+    async fn save_credentials(&self, exchange: crate::model::ExchangeId, key: &str, secret: &str, passphrase: &str) {
+        use std::io::Write;
+        let env_path = ".env";
+        let prefix = match exchange {
+            crate::model::ExchangeId::Binance => "BINANCE",
+            crate::model::ExchangeId::Bybit => "BYBIT",
+            crate::model::ExchangeId::Bitget => "BITGET",
+            _ => return,
+        };
+
+        let key_line = format!("{}_API_KEY={}\n", prefix, key);
+        let secret_line = format!("{}_API_SECRET={}\n", prefix, secret);
+        let pass_line = if !passphrase.is_empty() {
+             format!("{}_API_PASSPHRASE={}\n", prefix, passphrase)
+        } else {
+             "".to_string()
+        };
+
+        // Simple append to .env (not deduplicating for now, just for prototype)
+        if let Ok(mut file) = std::fs::OpenOptions::new().append(true).create(true).open(env_path) {
+            let _ = file.write_all(key_line.as_bytes());
+            let _ = file.write_all(secret_line.as_bytes());
+            if !pass_line.is_empty() {
+                let _ = file.write_all(pass_line.as_bytes());
+            }
+            info!("Saved {} credentials to .env", prefix);
         }
     }
 }
