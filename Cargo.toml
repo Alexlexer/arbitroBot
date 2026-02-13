@@ -20,3 +20,12 @@ reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
 env_logger = "0.10"
 log = "0.4"
 dotenvy = "0.15.7"
+
+[package.metadata.deb]
+maintainer = "AlexK <alex@example.com>"
+description = "Multi-Exchange Arbitrage Hub"
+section = "utility"
+priority = "optional"
+assets = [
+    ["target/release/arbit_hub", "usr/bin/arbit_hub", "755"],
+]
