@@ -23,13 +23,17 @@ impl RiskManager {
         funding_map: &HashMap<ExchangeId, FundingInfo>,
         status_map: &HashMap<ExchangeId, AssetStatus>,
         market_filters: &HashMap<ExchangeId, HashMap<String, crate::model::SymbolMarketFilters>>,
+        ticker_timestamps: &HashMap<ExchangeId, i64>,
         target_volume_usdt: Decimal, 
     ) -> Result<(), RiskError> {
         
         // 1. Check Wallet Status
         self.check_wallet_status(opp, status_map)?;
 
-        // 2. Check Min Notional Guard
+        // 2. Check Timestamp Drift (Stale Data Guard)
+        self.check_timestamp_drift(ticker_timestamps, 500)?;
+
+        // 3. Check Min Notional Guard
         self.check_min_notional(opp, market_filters, target_volume_usdt)?;
 
         // 3. Check Liquidity / Slippage
@@ -142,6 +146,25 @@ impl RiskManager {
         if let Some(s) = status_map.get(&opp.short_exchange) {
              if !s.is_active || !s.can_deposit {
                 return Err(RiskError::WalletDisabled(format!("{} wallet disabled/restricted", opp.short_exchange)));
+            }
+        }
+        Ok(())
+    }
+
+    /// Timestamp Drift Check: Block if data is older than max_lag_ms
+    fn check_timestamp_drift(
+        &self,
+        ticker_timestamps: &HashMap<ExchangeId, i64>,
+        max_lag_ms: i64,
+    ) -> Result<(), RiskError> {
+        let now = chrono::Utc::now().timestamp_millis();
+        for (exchange, ts) in ticker_timestamps {
+            let lag = now - ts;
+            if lag > max_lag_ms {
+                return Err(RiskError::PriceDrift(format!(
+                    "{} data is stale: {}ms lag (Max {}ms)",
+                    exchange, lag, max_lag_ms
+                )));
             }
         }
         Ok(())
