@@ -123,6 +123,10 @@ impl Aggregator {
                         status_map.insert(short.exchange, AssetStatus { can_deposit: true, can_withdraw: true, is_active: true });
 
                         let r_filters = self.market_filters.lock().unwrap();
+                        
+                        let mut ticker_timestamps = HashMap::new();
+                        ticker_timestamps.insert(long.exchange, long.timestamp);
+                        ticker_timestamps.insert(short.exchange, short.timestamp);
 
                         // Validate
                         match self.risk_manager.validate(&ArbitrageOpportunity {
@@ -133,7 +137,7 @@ impl Aggregator {
                             short_price: b_short.0,
                             spread_pct: net_spread,
                             timestamp: chrono::Utc::now().timestamp_millis(),
-                        }, &depth_map, &funding_map, &status_map, &r_filters, target_volume).await {
+                        }, &depth_map, &funding_map, &status_map, &r_filters, &ticker_timestamps, target_volume).await {
                             Ok(_) => {
                                 let opp = ArbitrageOpportunity {
                                     symbol: symbol.to_string(),
