@@ -2,9 +2,7 @@ use crate::model::{
     ExchangeId, ArbitrageOpportunity, OrderBookDepth, FundingInfo, AssetStatus, RiskError
 };
 use rust_decimal::Decimal;
-use rust_decimal::prelude::*;
 use std::collections::HashMap;
-use log::{info, warn};
 
 pub struct RiskManager {
     // Configuration constants could go here
@@ -242,7 +240,7 @@ impl RiskManager {
 
     /// Price Precision & Step Size Sync
     /// Rounds amount DOWN to the nearest Step Size
-    pub fn normalize_amount(amount: Decimal, step_size: Decimal) -> Decimal {
+    pub fn _normalize_amount(amount: Decimal, step_size: Decimal) -> Decimal {
         if step_size.is_zero() { return amount; }
         (amount / step_size).floor() * step_size
     }

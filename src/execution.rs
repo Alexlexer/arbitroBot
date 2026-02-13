@@ -1,6 +1,6 @@
 use crate::model::{ArbitrageOpportunity, ExchangeId};
 use crate::rate_limiter::RateLimiter;
-use log::{info, warn, error};
+use log::{info, error};
 use rust_decimal::Decimal;
 use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;

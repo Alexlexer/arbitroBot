@@ -136,7 +136,7 @@ impl Aggregator {
                             long_price: b_long.0,
                             short_price: b_short.0,
                             spread_pct: net_spread,
-                            timestamp: chrono::Utc::now().timestamp_millis(),
+                            _timestamp: chrono::Utc::now().timestamp_millis(),
                         }, &depth_map, &funding_map, &status_map, &r_filters, &ticker_timestamps, target_volume).await {
                             Ok(_) => {
                                 let opp = ArbitrageOpportunity {
@@ -146,7 +146,7 @@ impl Aggregator {
                                     long_price: b_long.0,
                                     short_price: b_short.0,
                                     spread_pct: net_spread,
-                                    timestamp: chrono::Utc::now().timestamp_millis(),
+                                    _timestamp: chrono::Utc::now().timestamp_millis(),
                                 };
 
                                 if let Err(e) = self.exec_tx.send(opp).await {

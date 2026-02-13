@@ -38,9 +38,9 @@ impl Exchange for BinanceLauncher {
                                 if let Ok(event) = serde_json::from_str::<BookTickerEvent>(&text) {
                                     if let (Ok(bid_p), Ok(bid_q), Ok(ask_p), Ok(ask_q)) = (
                                         Decimal::from_str(&event.b),
-                                        Decimal::from_str(&event.B),
+                                        Decimal::from_str(&event._bid_qty),
                                         Decimal::from_str(&event.a),
-                                        Decimal::from_str(&event.A),
+                                        Decimal::from_str(&event._ask_qty),
                                     ) {
                                         let ticker = UnifiedTicker {
                                             symbol: event.s.clone(),
@@ -84,7 +84,9 @@ impl Exchange for BinanceLauncher {
 struct BookTickerEvent {
     s: String, // Symbol
     b: String, // Best bid price
-    B: String, // Best bid qty
+    #[serde(rename = "B")]
+    _bid_qty: String, // Best bid qty
     a: String, // Best ask price
-    A: String, // Best ask qty
+    #[serde(rename = "A")]
+    _ask_qty: String, // Best ask qty
 }
