@@ -4,7 +4,7 @@ use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::str::FromStr;
-use log::{error, info, warn};
+use log::info;
 
 pub struct DataPoller {
     pub funding_rates: Arc<Mutex<HashMap<ExchangeId, HashMap<String, FundingInfo>>>>,

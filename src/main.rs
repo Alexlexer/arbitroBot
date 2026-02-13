@@ -11,11 +11,9 @@ mod rate_limiter;
 use aggregator::Aggregator;
 use execution::ExecutionActor;
 use model::UnifiedTicker;
-use notifier::TelegramNotifier;
 use rate_limiter::RateLimiter;
 use tokio::sync::mpsc;
-use std::sync::{Arc, Mutex};
-use std::collections::VecDeque;
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() {

@@ -1,53 +1,59 @@
     Checking arbit_hub v0.1.0 (C:\Dev\ArbitBotBM\arbit_hub)
-warning: unused import: `warn`
- --> src\execution.rs:2:17
+warning: unused import: `log::error`
+ --> src\risk_manager.rs:6:5
   |
-2 | use log::{info, warn};
-  |                 ^^^^
+6 | use log::error;
+  |     ^^^^^^^^^^
   |
   = note: `#[warn(unused_imports)]` on by default
 
-warning: unused imports: `info` and `warn`
- --> src\risk_manager.rs:7:11
-  |
-7 | use log::{info, warn};
-  |           ^^^^  ^^^^
+error[E0560]: struct `ArbitrageOpportunity` has no field named `timestamp`
+   --> src\aggregator.rs:139:29
+    |
+139 | ...                   timestamp: chrono::Utc::now().timestamp_millis(),
+    |                       ^^^^^^^^^ unknown field
+    |
+help: a field with a similar name exists
+    |
+139 |                             _timestamp: chrono::Utc::now().timestamp_millis(),
+    |                             +
 
-warning: unused import: `error`
- --> src\poller.rs:6:11
-  |
-6 | use log::{error, info};
-  |           ^^^^^
+error[E0560]: struct `ArbitrageOpportunity` has no field named `timestamp`
+   --> src\aggregator.rs:149:37
+    |
+149 | ...                   timestamp: chrono::Utc::now().timestamp_millis(),
+    |                       ^^^^^^^^^ unknown field
+    |
+help: a field with a similar name exists
+    |
+149 |                                     _timestamp: chrono::Utc::now().timestamp_millis(),
+    |                                     +
 
-warning: unused import: `Mutex`
-  --> src\main.rs:13:22
+error[E0609]: no field `B` on type `BookTickerEvent`
+  --> src\exchange\binance.rs:41:66
    |
-13 | use std::sync::{Arc, Mutex};
-   |                      ^^^^^
-
-warning: unused import: `std::collections::VecDeque`
-  --> src\main.rs:14:5
+41 | ...                   Decimal::from_str(&event.B),
+   |                                                ^ unknown field
    |
-14 | use std::collections::VecDeque;
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-warning: unused import: `rust_decimal::prelude`
- --> src\risk_manager.rs:5:5
-  |
-5 | use rust_decimal::prelude::*;
-  |     ^^^^^^^^^^^^^^^^^^^^^
-
-error[E0596]: cannot borrow `execution_actor` as mutable, as it is not declared as mutable
-  --> src\main.rs:45:9
+help: a field with a similar name exists
    |
-45 |         execution_actor.run().await;
-   |         ^^^^^^^^^^^^^^^ cannot borrow as mutable
+41 -                                         Decimal::from_str(&event.B),
+41 +                                         Decimal::from_str(&event.b),
    |
-help: consider changing this to be mutable
-   |
-43 |     let mut execution_actor = ExecutionActor::new(exec_rx);
-   |         +++
 
-For more information about this error, try `rustc --explain E0596`.
-warning: `arbit_hub` (bin "arbit_hub") generated 6 warnings
-error: could not compile `arbit_hub` (bin "arbit_hub") due to 1 previous error; 6 warnings emitted
+error[E0609]: no field `A` on type `BookTickerEvent`
+  --> src\exchange\binance.rs:43:66
+   |
+43 | ...                   Decimal::from_str(&event.A),
+   |                                                ^ unknown field
+   |
+help: a field with a similar name exists
+   |
+43 -                                         Decimal::from_str(&event.A),
+43 +                                         Decimal::from_str(&event.a),
+   |
+
+Some errors have detailed explanations: E0560, E0609.
+For more information about an error, try `rustc --explain E0560`.
+warning: `arbit_hub` (bin "arbit_hub") generated 1 warning
+error: could not compile `arbit_hub` (bin "arbit_hub") due to 4 previous errors; 1 warning emitted

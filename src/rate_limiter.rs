@@ -39,7 +39,7 @@ impl TokenBucket {
         self.last_refill = now;
     }
 
-    pub fn available_tokens(&self) -> f64 {
+    pub fn _available_tokens(&self) -> f64 {
         self.tokens
     }
 }

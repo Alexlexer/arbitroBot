@@ -9,6 +9,7 @@ pub mod bitget;
 #[async_trait]
 pub trait Exchange: Send + Sync {
     async fn connect(&mut self, tx: Sender<UnifiedTicker>) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    #[allow(dead_code)]
     async fn subscribe(&mut self, symbols: &[String]) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 }
 

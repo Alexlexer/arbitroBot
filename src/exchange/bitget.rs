@@ -34,15 +34,14 @@ impl Exchange for BitgetLauncher {
                 Ok(resp) => {
                      if let Ok(json) = resp.json::<serde_json::Value>().await {
                          // Bitget response: { code: "00000", data: [ { symbol: "BTCUSDT", ... } ] }
-                         if let Some(data) = json["data"].as_array() {
-                             for item in data {
-                                 if let Some(s) = item["symbol"].as_str() {
-                                     // Ensure it's USDT pair
-                                     if s.ends_with("USDT") {
-                                         symbols.push(s.to_string());
-                                     }
-                                 }
-                             }
+                         if let Some(data) = json.get("data").and_then(|d| d.as_array()) {
+                            for d in data {
+                                let inst_id = d.get("instId").and_then(|v| v.as_str()).unwrap_or("");
+                                // let timestamp = d.get("ts").and_then(|v| v.as_str()).unwrap_or("0").parse::<i64>().unwrap_or(0); // This line was in the snippet but not used for symbol collection
+                                if inst_id.ends_with("USDT") {
+                                    symbols.push(inst_id.to_string());
+                                }
+                            }
                          }
                      }
                 }
@@ -118,7 +117,7 @@ impl Exchange for BitgetLauncher {
 
                                               if !bids_vec.is_empty() && !asks_vec.is_empty() {
                                                   let ticker = UnifiedTicker {
-                                                      symbol: d.instId,
+                                                      symbol: d.inst_id,
                                                       exchange: ExchangeId::Bitget,
                                                       timestamp: chrono::Utc::now().timestamp_millis(),
                                                       bids: bids_vec,
@@ -157,7 +156,8 @@ struct BitgetResponse {
 
 #[derive(Deserialize)]
 struct BitgetData {
-    instId: String,
+    #[serde(rename = "instId")]
+    inst_id: String,
     bids: Vec<Vec<String>>,
     asks: Vec<Vec<String>>,
 }

@@ -2,6 +2,7 @@
 name = "arbit_hub"
 version = "0.1.0"
 edition = "2021"
+description = "Multi-Exchange Arbitrage Hub"
 
 [dependencies]
 tokio = { version = "1.32", features = ["full"] }
@@ -23,7 +24,6 @@ dotenvy = "0.15.7"
 
 [package.metadata.deb]
 maintainer = "AlexK <alex@example.com>"
-description = "Multi-Exchange Arbitrage Hub"
 section = "utility"
 priority = "optional"
 assets = [
