@@ -49,6 +49,7 @@ pub struct AssetStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SymbolMarketFilters {
     pub min_notional: Decimal, // Minimum USDT value (or quote currency)
+    pub is_trading: bool,      // Whether the symbol is currently in active trading mode
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
