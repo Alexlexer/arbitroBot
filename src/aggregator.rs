@@ -14,6 +14,7 @@ pub struct Aggregator {
     risk_manager: RiskManager,
     funding_rates: Arc<Mutex<HashMap<ExchangeId, HashMap<String, FundingInfo>>>>,
     market_filters: Arc<Mutex<HashMap<ExchangeId, HashMap<String, crate::model::SymbolMarketFilters>>>>,
+    account_state: Arc<Mutex<crate::model::GlobalAccountState>>,
     notifier: Arc<TelegramNotifier>,
     // Symbol -> Exchange -> Ticker
     market_data: HashMap<String, HashMap<ExchangeId, UnifiedTicker>>,
@@ -27,6 +28,7 @@ impl Aggregator {
         risk_manager: RiskManager,
         funding_rates: Arc<Mutex<HashMap<ExchangeId, HashMap<String, FundingInfo>>>>,
         market_filters: Arc<Mutex<HashMap<ExchangeId, HashMap<String, crate::model::SymbolMarketFilters>>>>,
+        account_state: Arc<Mutex<crate::model::GlobalAccountState>>,
         notifier: Arc<TelegramNotifier>,
     ) -> Self {
         Self {
@@ -36,6 +38,7 @@ impl Aggregator {
             risk_manager,
             funding_rates,
             market_filters,
+            account_state,
             notifier,
             market_data: HashMap::new(),
         }
@@ -191,6 +194,20 @@ impl Aggregator {
 
         println!("=== ARBITRAGE MATRIX (Threshold: 5.0%+) ===");
         println!("Last Update: {}", chrono::Local::now().format("%H:%M:%S"));
+
+        // 2. Plot Equity Summary
+        if let Ok(state) = self.account_state.lock() {
+            println!("\n[ BALANCE MONITOR ]");
+            println!("Total Equity: ${:.2} USDT | Global PnL: ${:.2}", 
+                state.total_equity_usdt, state.total_unrealized_pnl);
+            
+            let mut summary = String::new();
+            for (ex, s) in &state.exchange_states {
+                summary.push_str(&format!("{}: ${:.1} ", ex, s.total_equity));
+            }
+            println!("Exchanges: {}", summary);
+            println!("--------------------------------------------------");
+        }
 
         let mut opportunities = Vec::new();
 
