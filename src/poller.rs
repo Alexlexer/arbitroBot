@@ -328,14 +328,56 @@ impl DataPoller {
         let total_equity = Decimal::from_str(res["totalEquity"].as_str().unwrap_or("0"))?;
         let available = Decimal::from_str(res["availableBalance"].as_str().unwrap_or("0"))?;
 
-        // Positions need separate call on Bybit v5? Actually unified balance has some info, but positions is better.
-        // For brevity in MVP, we just take balance. 
-        Ok(crate::model::ExchangeAccountState {
-            total_equity,
-            available_balance: available,
-            margin_ratio: Decimal::ZERO,
-            positions: Vec::new(), // TODO: Fetch positions separately for Bybit
-        })
+        if let Ok(pos) = self.fetch_bybit_positions(client, key, secret).await {
+            Ok(crate::model::ExchangeAccountState {
+                total_equity,
+                available_balance: available,
+                margin_ratio: if total_equity.is_zero() { Decimal::ZERO } else { (total_equity - available) / total_equity }, 
+                positions: pos,
+            })
+        } else {
+            Ok(crate::model::ExchangeAccountState {
+                total_equity,
+                available_balance: available,
+                margin_ratio: Decimal::ZERO,
+                positions: Vec::new(),
+            })
+        }
+    }
+
+    async fn fetch_bybit_positions(&self, client: &reqwest::Client, key: &str, secret: &str) -> Result<Vec<crate::model::PositionInfo>, Box<dyn std::error::Error>> {
+        let timestamp = chrono::Utc::now().timestamp_millis().to_string();
+        let recv_window = "5000";
+        let query = "category=linear&settleCoin=USDT";
+        let payload = format!("{}{}{}{}", timestamp, key, recv_window, query);
+        let signature = self._hmac_signature(secret, &payload);
+
+        let url = format!("https://api.bybit.com/v5/position/list?{}", query);
+        let resp = client.get(&url)
+            .header("X-BAPI-API-KEY", key)
+            .header("X-BAPI-TIMESTAMP", &timestamp)
+            .header("X-BAPI-RECV-WINDOW", recv_window)
+            .header("X-BAPI-SIGN", signature)
+            .send().await?;
+
+        let json: serde_json::Value = resp.json().await?;
+        let mut positions = Vec::new();
+
+        if let Some(list) = json["result"]["list"].as_array() {
+            for p in list {
+                let size = Decimal::from_str(p["size"].as_str().unwrap_or("0"))?;
+                if !size.is_zero() {
+                    positions.push(crate::model::PositionInfo {
+                        symbol: p["symbol"].as_str().unwrap_or("").to_string(),
+                        side: p["side"].as_str().unwrap_or("").to_uppercase(),
+                        size: size.abs(),
+                        entry_price: Decimal::from_str(p["avgPrice"].as_str().unwrap_or("0"))?,
+                        unrealized_pnl: Decimal::from_str(p["unrealisedPnl"].as_str().unwrap_or("0"))?,
+                    });
+                }
+            }
+        }
+        Ok(positions)
     }
 
     async fn fetch_bitget_account(&self, client: &reqwest::Client, key: &str, secret: &str) -> Result<crate::model::ExchangeAccountState, Box<dyn std::error::Error>> {
@@ -360,12 +402,54 @@ impl DataPoller {
         let total_equity = Decimal::from_str(data["marginBalance"].as_str().unwrap_or("0"))?;
         let available = Decimal::from_str(data["available"].as_str().unwrap_or("0"))?;
 
+        let mut positions = Vec::new();
+        if let Ok(pos) = self.fetch_bitget_positions(client, key, secret).await {
+            positions = pos;
+        }
+
         Ok(crate::model::ExchangeAccountState {
             total_equity,
             available_balance: available,
-            margin_ratio: Decimal::ZERO,
-            positions: Vec::new(),
+            margin_ratio: if total_equity.is_zero() { Decimal::ZERO } else { (total_equity - available) / total_equity },
+            positions,
         })
+    }
+
+    async fn fetch_bitget_positions(&self, client: &reqwest::Client, key: &str, secret: &str) -> Result<Vec<crate::model::PositionInfo>, Box<dyn std::error::Error>> {
+        let passphrase = env::var("BITGET_API_PASSPHRASE").unwrap_or_default();
+        let timestamp = chrono::Utc::now().timestamp_millis().to_string();
+        let method = "GET";
+        let request_path = "/api/v2/mix/position/all-position?productType=USDT-FUTURES";
+        let payload = format!("{}{}{}", timestamp, method, request_path);
+        let signature = self._hmac_signature(secret, &payload);
+
+        let url = format!("https://api.bitget.com{}", request_path);
+        let resp = client.get(&url)
+            .header("ACCESS-KEY", key)
+            .header("ACCESS-SIGN", signature)
+            .header("ACCESS-TIMESTAMP", &timestamp)
+            .header("ACCESS-PASSPHRASE", passphrase) 
+            .send().await?;
+
+        let json: serde_json::Value = resp.json().await?;
+        let mut positions = Vec::new();
+
+        if let Some(list) = json["data"].as_array() {
+            for p in list {
+                let hold_side = p["holdSide"].as_str().unwrap_or("");
+                let size = Decimal::from_str(p["total"].as_str().unwrap_or("0"))?;
+                if !size.is_zero() {
+                    positions.push(crate::model::PositionInfo {
+                        symbol: p["symbol"].as_str().unwrap_or("").to_string(),
+                        side: if hold_side == "long" { "LONG".to_string() } else { "SHORT".to_string() },
+                        size: size.abs(),
+                        entry_price: Decimal::from_str(p["averageOpenPrice"].as_str().unwrap_or("0"))?,
+                        unrealized_pnl: Decimal::from_str(p["unrealizedPL"].as_str().unwrap_or("0"))?,
+                    });
+                }
+            }
+        }
+        Ok(positions)
     }
 
     fn _hmac_signature(&self, secret: &str, payload: &str) -> String {

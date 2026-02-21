@@ -1,0 +1,14 @@
+    Checking arbit_hub v0.1.0 (C:\Dev\ArbitBotBM\arbit_hub)
+error[E0425]: cannot find value `total_pnl` in this scope
+   --> src\poller.rs:332:13
+    |
+332 |             total_pnl = pos.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
+    |             ^^^^^^^^^
+    |
+help: you might have meant to introduce a new binding
+    |
+332 |             let total_pnl = pos.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
+    |             +++
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `arbit_hub` (bin "arbit_hub") due to 1 previous error
