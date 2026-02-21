@@ -18,6 +18,7 @@ pub struct Aggregator {
     rebalance_advisor: crate::rebalance_advisor::RebalanceAdvisor,
     last_rebalance_advice: Arc<Mutex<Vec<crate::model::RebalanceAdvice>>>,
     notifier: Arc<TelegramNotifier>,
+    messaging: crate::messaging::SharedMessaging,
     // Symbol -> Exchange -> Ticker
     market_data: HashMap<String, HashMap<ExchangeId, UnifiedTicker>>,
 }
@@ -28,10 +29,12 @@ impl Aggregator {
         exec_tx: Sender<ArbitrageOpportunity>,
         log_buffer: Arc<Mutex<VecDeque<String>>>,
         risk_manager: RiskManager,
+        rebalance_advisor: crate::rebalance_advisor::RebalanceAdvisor,
         funding_rates: Arc<Mutex<HashMap<ExchangeId, HashMap<String, FundingInfo>>>>,
         market_filters: Arc<Mutex<HashMap<ExchangeId, HashMap<String, crate::model::SymbolMarketFilters>>>>,
         account_state: Arc<Mutex<crate::model::GlobalAccountState>>,
         notifier: Arc<TelegramNotifier>,
+        messaging: crate::messaging::SharedMessaging,
     ) -> Self {
         Self {
             rx,
@@ -41,9 +44,10 @@ impl Aggregator {
             funding_rates,
             market_filters,
             account_state,
-            rebalance_advisor: crate::rebalance_advisor::RebalanceAdvisor::new(),
+            rebalance_advisor,
             last_rebalance_advice: Arc::new(Mutex::new(Vec::new())),
             notifier,
+            messaging,
             market_data: HashMap::new(),
         }
     }
@@ -62,6 +66,7 @@ impl Aggregator {
                 _ = interval.tick() => {
                     self.print_arbitrage_matrix();
                     self.check_rebalancing().await;
+                    self.broadcast_state().await;
                 }
             }
         }
@@ -70,12 +75,13 @@ impl Aggregator {
     async fn update_market_data(&mut self, ticker: UnifiedTicker) {
         let symbol = ticker.symbol.clone();
         let entry = self.market_data.entry(symbol.clone()).or_insert_with(HashMap::new);
-        entry.insert(ticker.exchange, ticker);
+        entry.insert(ticker.exchange, ticker.clone());
         
         // Check for immediate opportunity on every update (High-Frequency style)
-        // For simplicity in this step, we keep the visual matrix print separate, 
-        // but we can add detection logic here or in a separate method called here.
         self.detect_sharps(&symbol).await;
+        
+        // Broadcast ticker update
+        self.broadcast_message(&format!("ticker.{}", ticker.exchange), &ticker).await;
     }
     
     async fn detect_sharps(&self, symbol: &str) {
@@ -370,6 +376,20 @@ impl Aggregator {
             tokio::spawn(async move {
                 n.send_alert(&msg).await;
             });
+        }
+    }
+
+    async fn broadcast_state(&self) {
+        let state = self.account_state.lock().unwrap().clone();
+        self.broadcast_message("account.state", &state).await;
+    }
+
+    async fn broadcast_message<T: serde::Serialize>(&self, routing_key: &str, payload: &T) {
+        let msg = self.messaging.lock().await;
+        if let Some(client) = msg.as_ref() {
+            if let Err(e) = client.publish(routing_key, payload).await {
+                error!("RabbitMQ Publish Error ({}): {}", routing_key, e);
+            }
         }
     }
 }

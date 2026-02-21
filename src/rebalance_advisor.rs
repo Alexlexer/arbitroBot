@@ -1,18 +1,21 @@
 use crate::model::{GlobalAccountState, ExchangeId, RebalanceAdvice};
+use crate::config::AppConfig;
 use rust_decimal::Decimal;
 
 pub struct RebalanceAdvisor {
-    margin_threshold_low: Decimal,   // 40% - Early warning
-    margin_threshold_high: Decimal,  // 70% - Urgent
-    concentration_threshold: Decimal, // 70% - Max capital on one exchange
+    margin_threshold_low: Decimal,
+    margin_threshold_high: Decimal,
+    concentration_threshold: Decimal,
+    target_margin_ratio: Decimal,
 }
 
 impl RebalanceAdvisor {
-    pub fn new() -> Self {
+    pub fn new(config: &AppConfig) -> Self {
         Self {
-            margin_threshold_low: Decimal::new(4, 1),   // 0.4
-            margin_threshold_high: Decimal::new(7, 1),  // 0.7
-            concentration_threshold: Decimal::new(7, 1), // 0.7
+            margin_threshold_low: config.margin_threshold_low,
+            margin_threshold_high: config.margin_threshold_high,
+            concentration_threshold: config.concentration_threshold,
+            target_margin_ratio: config.target_margin_ratio,
         }
     }
 
@@ -103,17 +106,16 @@ impl RebalanceAdvisor {
         advices
     }
 
-    /// Calculates how much USDT is needed to bring margin ratio back to 20% (safe level)
+    /// Calculates how much USDT is needed to bring margin ratio back to target (safe level)
     /// Margin Ratio = (Total Equity - Available Balance) / Total Equity
-    /// We want (Total Equity + X - Available Balance) / (Total Equity + X) = 0.2
-    /// Total Equity - Available Balance = 0.2 * (Total Equity + X)
-    /// Total Equity - Available Balance = 0.2 * Total Equity + 0.2 * X
-    /// 0.8 * Total Equity - Available Balance = 0.2 * X
-    /// X = (0.8 * Total Equity - Available Balance) / 0.2
+    /// We want (Total Equity + X - Available Balance) / (Total Equity + X) = Target
+    /// Total Equity - Available Balance = Target * (Total Equity + X)
+    /// Total Equity - Available Balance = Target * Total Equity + Target * X
+    /// (1 - Target) * Total Equity - Available Balance = Target * X
+    /// X = ((1 - Target) * Total Equity - Available Balance) / Target
     fn calculate_required_amount(&self, total_equity: Decimal, available: Decimal) -> Decimal {
-        let target_ratio = Decimal::new(2, 1); // target 20%
-        let factor = Decimal::ONE - target_ratio; // 0.8
-        let required = (factor * total_equity - available) / target_ratio;
+        let factor = Decimal::ONE - self.target_margin_ratio;
+        let required = (factor * total_equity - available) / self.target_margin_ratio;
         required.max(Decimal::ZERO).round_dp(0)
     }
 }
