@@ -130,6 +130,7 @@ pub struct GlobalAccountState {
     pub total_equity_usdt: Decimal,
     pub total_unrealized_pnl: Decimal,
     pub exchange_states: HashMap<ExchangeId, ExchangeAccountState>,
+    pub asset_statuses: HashMap<ExchangeId, HashMap<String, AssetStatus>>,
 }
 
 #[derive(Debug, Clone)]

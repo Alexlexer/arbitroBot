@@ -23,9 +23,19 @@ impl RebalanceAdvisor {
             return advices;
         }
 
-        // 1. Collect all exchanges needing funds (Margin Pressure)
+        // 2. Collect all exchanges needing funds (Margin Pressure)
         let mut recipients = Vec::new();
         for (eid, ex_state) in &state.exchange_states {
+            // Check if deposit is enabled for USDT
+            let can_deposit = state.asset_statuses.get(eid)
+                .and_then(|m| m.get("USDT"))
+                .map(|s| s.can_deposit)
+                .unwrap_or(true);
+
+            if !can_deposit {
+                continue;
+            }
+
             if ex_state.margin_ratio > self.margin_threshold_low {
                 let required = self.calculate_required_amount(ex_state.total_equity, ex_state.available_balance);
                 if required > Decimal::ZERO {
@@ -37,9 +47,16 @@ impl RebalanceAdvisor {
         // Sort recipients by margin ratio descending (highest risk first)
         recipients.sort_by(|a, b| b.1.cmp(&a.1));
 
-        // 2. Collect potential donors (Exchanges with surplus / low margin)
+        // 3. Collect potential donors (Exchanges with surplus / low margin)
         let mut donors: Vec<_> = state.exchange_states.iter()
-            .filter(|(_, s)| s.margin_ratio < self.margin_threshold_low && s.available_balance > Decimal::from(100))
+            .filter(|(eid, s)| {
+                let can_withdraw = state.asset_statuses.get(eid)
+                    .and_then(|m| m.get("USDT"))
+                    .map(|s| s.can_withdraw)
+                    .unwrap_or(true);
+                
+                can_withdraw && s.margin_ratio < self.margin_threshold_low && s.available_balance > Decimal::from(100)
+            })
             .collect();
         
         // Sort donors by available balance descending (most surplus first)

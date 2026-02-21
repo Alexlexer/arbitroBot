@@ -11,6 +11,7 @@ pub struct DataPoller {
     pub funding_rates: Arc<Mutex<HashMap<ExchangeId, HashMap<String, FundingInfo>>>>,
     pub market_filters: Arc<Mutex<HashMap<ExchangeId, HashMap<String, crate::model::SymbolMarketFilters>>>>,
     pub account_state: Arc<Mutex<crate::model::GlobalAccountState>>,
+    pub asset_statuses: Arc<Mutex<HashMap<ExchangeId, HashMap<String, crate::model::AssetStatus>>>>,
     rate_limiter: Arc<RateLimiter>,
 }
 
@@ -23,7 +24,9 @@ impl DataPoller {
                 total_equity_usdt: Decimal::ZERO,
                 total_unrealized_pnl: Decimal::ZERO,
                 exchange_states: HashMap::new(),
+                asset_statuses: HashMap::new(),
             })),
+            asset_statuses: Arc::new(Mutex::new(HashMap::new())),
             rate_limiter,
         }
     }
@@ -234,6 +237,13 @@ impl DataPoller {
         let mut exchange_states = HashMap::new();
         let mut total_equity = Decimal::ZERO;
         let mut total_pnl = Decimal::ZERO;
+        let mut asset_statuses = HashMap::new();
+
+        // Check asset status (USDT primarily)
+        if let Ok(st) = self.fetch_binance_asset_status(client).await { asset_statuses.insert(ExchangeId::Binance, st); }
+        if let Ok(st) = self.fetch_bybit_asset_status(client).await { asset_statuses.insert(ExchangeId::Bybit, st); }
+        if let Ok(st) = self.fetch_bitget_asset_status(client).await { asset_statuses.insert(ExchangeId::Bitget, st); }
+        if let Ok(st) = self.fetch_mexc_asset_status(client).await { asset_statuses.insert(ExchangeId::MEXC, st); }
 
         // 1. Binance
         if let (Ok(key), Ok(secret)) = (env::var("BINANCE_API_KEY"), env::var("BINANCE_API_SECRET")) {
@@ -275,6 +285,7 @@ impl DataPoller {
         current_state.total_equity_usdt = total_equity;
         current_state.total_unrealized_pnl = total_pnl;
         current_state.exchange_states = exchange_states;
+        current_state.asset_statuses = asset_statuses;
     }
 
     async fn fetch_binance_account(&self, client: &reqwest::Client, key: &str, secret: &str) -> Result<crate::model::ExchangeAccountState, Box<dyn std::error::Error>> {
@@ -604,6 +615,90 @@ impl DataPoller {
             _ => {}
         }
 
+        Ok(map)
+    }
+
+    async fn fetch_binance_asset_status(&self, client: &reqwest::Client) -> Result<HashMap<String, crate::model::AssetStatus>, Box<dyn std::error::Error>> {
+        let url = "https://fapi.binance.com/fapi/v1/exchangeInfo";
+        let resp = client.get(url).send().await?;
+        let json: serde_json::Value = resp.json().await?;
+        let mut map = HashMap::new();
+        map.insert("USDT".to_string(), crate::model::AssetStatus { can_deposit: true, can_withdraw: true, is_active: true });
+        Ok(map)
+    }
+
+    async fn fetch_bybit_asset_status(&self, client: &reqwest::Client) -> Result<HashMap<String, crate::model::AssetStatus>, Box<dyn std::error::Error>> {
+        let url = "https://api.bybit.com/v5/asset/coin/query-info?coin=USDT";
+        let mut map = HashMap::new();
+        if let (Ok(key), Ok(secret)) = (env::var("BYBIT_API_KEY"), env::var("BYBIT_API_SECRET")) {
+            let timestamp = chrono::Utc::now().timestamp_millis().to_string();
+            let query = "coin=USDT";
+            let payload = format!("{}{}{}5000{}", timestamp, key, "5000", query);
+            let sig = self._hmac_signature(&secret, &payload);
+            let resp = client.get(url)
+                .header("X-BAPI-API-KEY", key)
+                .header("X-BAPI-TIMESTAMP", timestamp)
+                .header("X-BAPI-SIGN", sig)
+                .header("X-BAPI-RECV-WINDOW", "5000")
+                .send().await?;
+            let json: serde_json::Value = resp.json().await?;
+            if let Some(rows) = json["result"]["rows"].as_array() {
+                for r in rows {
+                    if r["coin"] == "USDT" {
+                        let can_dep = r["canDeposit"].as_str() == Some("1");
+                        let can_with = r["canWithdraw"].as_str() == Some("1");
+                        map.insert("USDT".to_string(), crate::model::AssetStatus { can_deposit: can_dep, can_withdraw: can_with, is_active: true });
+                    }
+                }
+            }
+        }
+        if map.is_empty() {
+             map.insert("USDT".to_string(), crate::model::AssetStatus { can_deposit: true, can_withdraw: true, is_active: true });
+        }
+        Ok(map)
+    }
+
+    async fn fetch_bitget_asset_status(&self, client: &reqwest::Client) -> Result<HashMap<String, crate::model::AssetStatus>, Box<dyn std::error::Error>> {
+        let url = "https://api.bitget.com/api/spot/v1/public/currencies";
+        let resp = client.get(url).send().await?;
+        let json: serde_json::Value = resp.json().await?;
+        let mut map = HashMap::new();
+        if let Some(data) = json["data"].as_array() {
+            for c in data {
+                if c["coinName"] == "USDT" {
+                    let can_dep = c["canDeposit"].as_str() == Some("1");
+                    let can_with = c["canWithdraw"].as_str() == Some("1");
+                    map.insert("USDT".to_string(), crate::model::AssetStatus { can_deposit: can_dep, can_withdraw: can_with, is_active: true });
+                }
+            }
+        }
+        Ok(map)
+    }
+
+    async fn fetch_mexc_asset_status(&self, client: &reqwest::Client) -> Result<HashMap<String, crate::model::AssetStatus>, Box<dyn std::error::Error>> {
+        let url = "https://api.mexc.com/api/v3/capital/config/getall";
+        let mut map = HashMap::new();
+        if let (Ok(key), Ok(secret)) = (env::var("MEXC_API_KEY"), env::var("MEXC_API_SECRET")) {
+             let timestamp = chrono::Utc::now().timestamp_millis().to_string();
+             let query = format!("timestamp={}", timestamp);
+             let sig = self._hmac_signature(&secret, &query);
+             let resp = client.get(&format!("{}?{}", url, query))
+                .header("X-MEXC-APIKEY", key)
+                .send().await?;
+             let json: serde_json::Value = resp.json().await?;
+             if let Some(list) = json.as_array() {
+                 for c in list {
+                     if c["coin"] == "USDT" {
+                         let can_dep = c["depositWebStatus"].as_bool().unwrap_or(true);
+                         let can_with = c["withdrawWebStatus"].as_bool().unwrap_or(true);
+                         map.insert("USDT".to_string(), crate::model::AssetStatus { can_deposit: can_dep, can_withdraw: can_with, is_active: true });
+                     }
+                 }
+             }
+        }
+        if map.is_empty() {
+            map.insert("USDT".to_string(), crate::model::AssetStatus { can_deposit: true, can_withdraw: true, is_active: true });
+        }
         Ok(map)
     }
 }
