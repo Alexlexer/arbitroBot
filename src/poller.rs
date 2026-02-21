@@ -262,6 +262,15 @@ impl DataPoller {
             }
         }
 
+        // 4. MEXC
+        if let (Ok(key), Ok(secret)) = (env::var("MEXC_API_KEY"), env::var("MEXC_API_SECRET")) {
+            if let Ok(state) = self.fetch_mexc_account(client, &key, &secret).await {
+                total_equity += state.total_equity;
+                total_pnl += state.positions.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
+                exchange_states.insert(ExchangeId::MEXC, state);
+            }
+        }
+
         let mut current_state = self.account_state.lock().unwrap();
         current_state.total_equity_usdt = total_equity;
         current_state.total_unrealized_pnl = total_pnl;
@@ -450,6 +459,87 @@ impl DataPoller {
             }
         }
         Ok(positions)
+    }
+
+    async fn fetch_mexc_account(&self, client: &reqwest::Client, key: &str, secret: &str) -> Result<crate::model::ExchangeAccountState, Box<dyn std::error::Error>> {
+        let timestamp = chrono::Utc::now().timestamp_millis().to_string();
+        let signature = self._mexc_signature(secret, key, &timestamp, "");
+
+        let url = "https://contract.mexc.com/api/v1/private/account/assets";
+        let resp = client.get(url)
+            .header("ApiKey", key)
+            .header("Request-Time", &timestamp)
+            .header("Signature", signature)
+            .send().await?;
+
+        let json: serde_json::Value = resp.json().await?;
+        let mut total_equity = Decimal::ZERO;
+        let mut available = Decimal::ZERO;
+
+        if let Some(data) = json["data"].as_array() {
+            for asset in data {
+                if asset["currency"] == "USDT" {
+                    total_equity = Decimal::from_str(asset["equity"].as_str().unwrap_or("0"))?;
+                    available = Decimal::from_str(asset["availableBalance"].as_str().unwrap_or("0"))?;
+                    break;
+                }
+            }
+        }
+
+        let mut positions = Vec::new();
+        if let Ok(pos) = self.fetch_mexc_positions(client, key, secret).await {
+            positions = pos;
+        }
+
+        Ok(crate::model::ExchangeAccountState {
+            total_equity,
+            available_balance: available,
+            margin_ratio: if total_equity.is_zero() { Decimal::ZERO } else { (total_equity - available) / total_equity },
+            positions,
+        })
+    }
+
+    async fn fetch_mexc_positions(&self, client: &reqwest::Client, key: &str, secret: &str) -> Result<Vec<crate::model::PositionInfo>, Box<dyn std::error::Error>> {
+        let timestamp = chrono::Utc::now().timestamp_millis().to_string();
+        let signature = self._mexc_signature(secret, key, &timestamp, "");
+
+        let url = "https://contract.mexc.com/api/v1/private/position/open_positions";
+        let resp = client.get(url)
+            .header("ApiKey", key)
+            .header("Request-Time", &timestamp)
+            .header("Signature", signature)
+            .send().await?;
+
+        let json: serde_json::Value = resp.json().await?;
+        let mut positions = Vec::new();
+
+        if let Some(list) = json["data"].as_array() {
+            for p in list {
+                let size = Decimal::from_str(p["holdVol"].as_str().unwrap_or("0"))?;
+                if !size.is_zero() {
+                    let side = if p["positionType"].as_i64() == Some(1) { "LONG" } else { "SHORT" };
+                    positions.push(crate::model::PositionInfo {
+                        symbol: p["symbol"].as_str().unwrap_or("").to_string(),
+                        side: side.to_string(),
+                        size: size.abs(),
+                        entry_price: Decimal::from_str(p["avgEntryPrice"].as_str().unwrap_or("0"))?,
+                        unrealized_pnl: Decimal::from_str(p["unrealisedPnl"].as_str().unwrap_or("0"))?,
+                    });
+                }
+            }
+        }
+        Ok(positions)
+    }
+
+    fn _mexc_signature(&self, secret: &str, key: &str, timestamp: &str, payload: &str) -> String {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+
+        let sign_str = format!("{}{}{}", key, timestamp, payload);
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
+        mac.update(sign_str.as_bytes());
+        hex::encode(mac.finalize().into_bytes())
     }
 
     fn _hmac_signature(&self, secret: &str, payload: &str) -> String {
