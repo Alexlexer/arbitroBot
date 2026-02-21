@@ -23,46 +23,80 @@ impl RebalanceAdvisor {
             return advices;
         }
 
-        // 1. Check Concentration Risk
+        // 1. Collect all exchanges needing funds (Margin Pressure)
+        let mut recipients = Vec::new();
         for (eid, ex_state) in &state.exchange_states {
-            let concentration = ex_state.total_equity / state.total_equity_usdt;
-            if concentration > self.concentration_threshold {
-                advices.push(RebalanceAdvice {
-                    from_exchange: *eid,
-                    to_exchange: ExchangeId::Binance, // Default suggestions for now
-                    amount_usdt: ex_state.total_equity * Decimal::new(2, 1), // Suggest moving 20%
-                    reason: format!("High Concentration Risk: {:.1}% on {}", concentration * Decimal::from(100), eid),
-                });
+            if ex_state.margin_ratio > self.margin_threshold_low {
+                let required = self.calculate_required_amount(ex_state.total_equity, ex_state.available_balance);
+                if required > Decimal::ZERO {
+                    recipients.push((*eid, ex_state.margin_ratio, required));
+                }
             }
         }
 
-        // 2. Check Margin Pressure
-        for (eid, ex_state) in &state.exchange_states {
-            if ex_state.margin_ratio > self.margin_threshold_low {
-                let urgency = if ex_state.margin_ratio > self.margin_threshold_high { "URGENT" } else { "Advisory" };
-                
-                // Find a donor (exchange with lowest margin ratio and available balance)
-                let mut donor = None;
-                let mut min_ratio = Decimal::ONE;
+        // Sort recipients by margin ratio descending (highest risk first)
+        recipients.sort_by(|a, b| b.1.cmp(&a.1));
 
-                for (deid, dex_state) in &state.exchange_states {
-                    if deid != eid && dex_state.margin_ratio < min_ratio && dex_state.available_balance > Decimal::from(100) {
-                        min_ratio = dex_state.margin_ratio;
-                        donor = Some(*deid);
+        // 2. Collect potential donors (Exchanges with surplus / low margin)
+        let mut donors: Vec<_> = state.exchange_states.iter()
+            .filter(|(_, s)| s.margin_ratio < self.margin_threshold_low && s.available_balance > Decimal::from(100))
+            .collect();
+        
+        // Sort donors by available balance descending (most surplus first)
+        donors.sort_by(|a, b| b.1.available_balance.cmp(&a.1.available_balance));
+
+        // 3. Match recipients with donors
+        for (r_eid, r_ratio, mut r_amount) in recipients {
+            for (d_eid, d_state) in &donors {
+                if r_amount.is_zero() { break; }
+                
+                let donor_available = d_state.available_balance;
+                if donor_available > Decimal::from(50) {
+                    let transfer = r_amount.min(donor_available - Decimal::from(50)); // Leave some buffer
+                    if transfer > Decimal::from(10) {
+                        let urgency = if r_ratio > self.margin_threshold_high { "URGENT" } else { "Advisory" };
+                        advices.push(RebalanceAdvice {
+                            from_exchange: **d_eid,
+                            to_exchange: r_eid,
+                            amount_usdt: transfer,
+                            reason: format!("[{}] {} Margin Ratio is {:.1}% (Requires ${:.0})", urgency, r_eid, r_ratio * Decimal::from(100), r_amount),
+                        });
+                        r_amount -= transfer;
                     }
                 }
+            }
+        }
 
-                if let Some(from_eid) = donor {
+        // 4. Check Concentration Risk (Special case)
+        for (eid, ex_state) in &state.exchange_states {
+            let concentration = ex_state.total_equity / state.total_equity_usdt;
+            if concentration > self.concentration_threshold {
+                let surplus = ex_state.total_equity - (state.total_equity_usdt * self.concentration_threshold);
+                if surplus > Decimal::from(100) {
                     advices.push(RebalanceAdvice {
-                        from_exchange: from_eid,
-                        to_exchange: *eid,
-                        amount_usdt: Decimal::from(500), // Default rebalance chunk
-                        reason: format!("[{}] {} Margin Ratio is {:.1}%", urgency, eid, ex_state.margin_ratio * Decimal::from(100)),
+                        from_exchange: *eid,
+                        to_exchange: ExchangeId::Binance, // Default safety net
+                        amount_usdt: surplus,
+                        reason: format!("Concentration Risk: {:.1}% on {} (Surplus ${:.0})", concentration * Decimal::from(100), eid, surplus),
                     });
                 }
             }
         }
 
         advices
+    }
+
+    /// Calculates how much USDT is needed to bring margin ratio back to 20% (safe level)
+    /// Margin Ratio = (Total Equity - Available Balance) / Total Equity
+    /// We want (Total Equity + X - Available Balance) / (Total Equity + X) = 0.2
+    /// Total Equity - Available Balance = 0.2 * (Total Equity + X)
+    /// Total Equity - Available Balance = 0.2 * Total Equity + 0.2 * X
+    /// 0.8 * Total Equity - Available Balance = 0.2 * X
+    /// X = (0.8 * Total Equity - Available Balance) / 0.2
+    fn calculate_required_amount(&self, total_equity: Decimal, available: Decimal) -> Decimal {
+        let target_ratio = Decimal::new(2, 1); // target 20%
+        let factor = Decimal::ONE - target_ratio; // 0.8
+        let required = (factor * total_equity - available) / target_ratio;
+        required.max(Decimal::ZERO).round_dp(0)
     }
 }
