@@ -244,6 +244,7 @@ impl DataPoller {
         if let Ok(st) = self.fetch_bybit_asset_status(client).await { asset_statuses.insert(ExchangeId::Bybit, st); }
         if let Ok(st) = self.fetch_bitget_asset_status(client).await { asset_statuses.insert(ExchangeId::Bitget, st); }
         if let Ok(st) = self.fetch_mexc_asset_status(client).await { asset_statuses.insert(ExchangeId::MEXC, st); }
+        if let Ok(st) = self.fetch_okx_asset_status(client).await { asset_statuses.insert(ExchangeId::Okx, st); }
 
         // 1. Binance
         if let (Ok(key), Ok(secret)) = (env::var("BINANCE_API_KEY"), env::var("BINANCE_API_SECRET")) {
@@ -278,6 +279,15 @@ impl DataPoller {
                 total_equity += state.total_equity;
                 total_pnl += state.positions.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
                 exchange_states.insert(ExchangeId::MEXC, state);
+            }
+        }
+
+        // 5. OKX
+        if let (Ok(key), Ok(secret), Ok(passphrase)) = (env::var("OKX_API_KEY"), env::var("OKX_API_SECRET"), env::var("OKX_API_PASSPHRASE")) {
+            if let Ok(state) = self.fetch_okx_account(client, &key, &secret, &passphrase).await {
+                total_equity += state.total_equity;
+                total_pnl += state.positions.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
+                exchange_states.insert(ExchangeId::Okx, state);
             }
         }
 
@@ -621,7 +631,7 @@ impl DataPoller {
     async fn fetch_binance_asset_status(&self, client: &reqwest::Client) -> Result<HashMap<String, crate::model::AssetStatus>, Box<dyn std::error::Error>> {
         let url = "https://fapi.binance.com/fapi/v1/exchangeInfo";
         let resp = client.get(url).send().await?;
-        let json: serde_json::Value = resp.json().await?;
+        let _json: serde_json::Value = resp.json().await?;
         let mut map = HashMap::new();
         map.insert("USDT".to_string(), crate::model::AssetStatus { can_deposit: true, can_withdraw: true, is_active: true });
         Ok(map)
@@ -682,7 +692,7 @@ impl DataPoller {
              let timestamp = chrono::Utc::now().timestamp_millis().to_string();
              let query = format!("timestamp={}", timestamp);
              let sig = self._hmac_signature(&secret, &query);
-             let resp = client.get(&format!("{}?{}", url, query))
+             let resp = client.get(&format!("{}?{}&signature={}", url, query, sig))
                 .header("X-MEXC-APIKEY", key)
                 .send().await?;
              let json: serde_json::Value = resp.json().await?;
@@ -700,5 +710,113 @@ impl DataPoller {
             map.insert("USDT".to_string(), crate::model::AssetStatus { can_deposit: true, can_withdraw: true, is_active: true });
         }
         Ok(map)
+    }
+
+    async fn fetch_okx_account(&self, client: &reqwest::Client, key: &str, secret: &str, passphrase: &str) -> Result<crate::model::ExchangeAccountState, Box<dyn std::error::Error>> {
+        let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let path = "/api/v5/account/balance?ccy=USDT";
+        let signature = self._okx_signature(secret, &timestamp, "GET", path, "");
+
+        let url = format!("https://www.okx.com{}", path);
+        let resp = client.get(&url)
+            .header("OK-ACCESS-KEY", key)
+            .header("OK-ACCESS-SIGN", signature)
+            .header("OK-ACCESS-TIMESTAMP", &timestamp)
+            .header("OK-ACCESS-PASSPHRASE", passphrase)
+            .send().await?;
+
+        let json: serde_json::Value = resp.json().await?;
+        let mut total_equity = Decimal::ZERO;
+        let mut available = Decimal::ZERO;
+
+        if let Some(data) = json["data"].as_array().and_then(|a| a.first()) {
+            total_equity = Decimal::from_str(data["totalEq"].as_str().unwrap_or("0"))?;
+            if let Some(details) = data["details"].as_array() {
+                for d in details {
+                    if d["ccy"] == "USDT" {
+                        available = Decimal::from_str(d["availBal"].as_str().unwrap_or("0"))?;
+                        break;
+                    }
+                }
+            }
+        }
+
+        let mut positions = Vec::new();
+        if let Ok(pos) = self.fetch_okx_positions(client, key, secret, passphrase).await {
+            positions = pos;
+        }
+
+        Ok(crate::model::ExchangeAccountState {
+            total_equity,
+            available_balance: available,
+            margin_ratio: if total_equity.is_zero() { Decimal::ZERO } else { (total_equity - available) / total_equity },
+            positions,
+        })
+    }
+
+    async fn fetch_okx_positions(&self, client: &reqwest::Client, key: &str, secret: &str, passphrase: &str) -> Result<Vec<crate::model::PositionInfo>, Box<dyn std::error::Error>> {
+        let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let path = "/api/v5/account/positions?instType=SWAP"; // Perpetual swaps
+        let signature = self._okx_signature(secret, &timestamp, "GET", path, "");
+
+        let url = format!("https://www.okx.com{}", path);
+        let resp = client.get(&url)
+            .header("OK-ACCESS-KEY", key)
+            .header("OK-ACCESS-SIGN", signature)
+            .header("OK-ACCESS-TIMESTAMP", &timestamp)
+            .header("OK-ACCESS-PASSPHRASE", passphrase)
+            .send().await?;
+
+        let json: serde_json::Value = resp.json().await?;
+        let mut positions = Vec::new();
+
+        if let Some(data) = json["data"].as_array() {
+            for p in data {
+                let size = Decimal::from_str(p["pos"].as_str().unwrap_or("0"))?;
+                if !size.is_zero() {
+                    positions.push(crate::model::PositionInfo {
+                        symbol: p["instId"].as_str().unwrap_or("").to_string(),
+                        side: p["posSide"].as_str().unwrap_or("").to_uppercase(),
+                        size: size.abs(),
+                        entry_price: Decimal::from_str(p["avgPx"].as_str().unwrap_or("0"))?,
+                        unrealized_pnl: Decimal::from_str(p["upl"].as_str().unwrap_or("0"))?,
+                    });
+                }
+            }
+        }
+        Ok(positions)
+    }
+
+    async fn fetch_okx_asset_status(&self, client: &reqwest::Client) -> Result<HashMap<String, crate::model::AssetStatus>, Box<dyn std::error::Error>> {
+        // OKX public currency info
+        let url = "https://www.okx.com/api/v5/public/currencies";
+        let resp = client.get(url).send().await?;
+        let json: serde_json::Value = resp.json().await?;
+        let mut map = HashMap::new();
+        if let Some(list) = json["data"].as_array() {
+            for c in list {
+                if c["ccy"] == "USDT" {
+                    let can_dep = c["canDep"].as_bool().unwrap_or(true);
+                    let can_with = c["canWd"].as_bool().unwrap_or(true);
+                    map.insert("USDT".to_string(), crate::model::AssetStatus { can_deposit: can_dep, can_withdraw: can_with, is_active: true });
+                }
+            }
+        }
+        if map.is_empty() {
+             map.insert("USDT".to_string(), crate::model::AssetStatus { can_deposit: true, can_withdraw: true, is_active: true });
+        }
+        Ok(map)
+    }
+
+    fn _okx_signature(&self, secret: &str, timestamp: &str, method: &str, path: &str, body: &str) -> String {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        use base64::{Engine as _, engine::general_purpose};
+        type HmacSha256 = Hmac<Sha256>;
+
+        let sign_str = format!("{}{}{}{}", timestamp, method, path, body);
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
+        mac.update(sign_str.as_bytes());
+        general_purpose::STANDARD.encode(mac.finalize().into_bytes())
     }
 }
