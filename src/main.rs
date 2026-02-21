@@ -7,6 +7,7 @@ mod risk_manager;
 mod poller;
 mod notifier;
 mod rate_limiter;
+mod rebalance_advisor;
 
 use aggregator::Aggregator;
 use execution::ExecutionActor;

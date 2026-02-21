@@ -45,7 +45,7 @@ impl Exchange for BybitLauncher {
                                  for item in list {
                                      if let Some(s) = item["symbol"].as_str() {
                                          if s.ends_with("USDT") {
-                                             symbols.push(s.to_string());
+                                             symbols.push(crate::model::normalize_symbol(s));
                                          }
                                      }
                                  }
@@ -112,7 +112,7 @@ impl Exchange for BybitLauncher {
                             if let Ok(Message::Text(text)) = msg {
                                 if let Ok(event) = serde_json::from_str::<BybitResponse>(&text) {
                                     if let Some(data) = event.data {
-                                        let sym = event.topic.unwrap_or_default().replace("orderbook.50.", "");
+                                        let sym = crate::model::normalize_symbol(&event.topic.unwrap_or_default().replace("orderbook.50.", ""));
                                         
                                         let mut bids_vec = Vec::new();
                                         let mut asks_vec = Vec::new();

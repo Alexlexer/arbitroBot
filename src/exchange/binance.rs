@@ -43,7 +43,7 @@ impl Exchange for BinanceLauncher {
                                         Decimal::from_str(&event._ask_qty),
                                     ) {
                                         let ticker = UnifiedTicker {
-                                            symbol: event.s.clone(),
+                                            symbol: crate::model::normalize_symbol(&event.s),
                                             exchange: ExchangeId::Binance,
                                             timestamp: chrono::Utc::now().timestamp_millis(),
                                             bids: vec![(bid_p, bid_q)],

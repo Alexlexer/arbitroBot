@@ -39,7 +39,7 @@ impl Exchange for BitgetLauncher {
                                 let inst_id = d.get("instId").and_then(|v| v.as_str()).unwrap_or("");
                                 // let timestamp = d.get("ts").and_then(|v| v.as_str()).unwrap_or("0").parse::<i64>().unwrap_or(0); // This line was in the snippet but not used for symbol collection
                                 if inst_id.ends_with("USDT") {
-                                    symbols.push(inst_id.to_string());
+                                    symbols.push(crate::model::normalize_symbol(inst_id));
                                 }
                             }
                          }
@@ -117,7 +117,7 @@ impl Exchange for BitgetLauncher {
 
                                               if !bids_vec.is_empty() && !asks_vec.is_empty() {
                                                   let ticker = UnifiedTicker {
-                                                      symbol: d.inst_id,
+                                                      symbol: crate::model::normalize_symbol(&d.inst_id),
                                                       exchange: ExchangeId::Bitget,
                                                       timestamp: chrono::Utc::now().timestamp_millis(),
                                                       bids: bids_vec,

@@ -5,6 +5,11 @@ use crate::model::UnifiedTicker;
 pub mod binance;
 pub mod bybit;
 pub mod bitget;
+pub mod mexc;
+pub mod bitmart;
+pub mod kraken;
+pub mod ourbit;
+pub mod gate;
 
 #[async_trait]
 pub trait Exchange: Send + Sync {
@@ -17,6 +22,10 @@ pub async fn launch_all(tx: Sender<UnifiedTicker>) {
     use crate::exchange::binance::BinanceLauncher;
     use crate::exchange::bybit::BybitLauncher;
     use crate::exchange::bitget::BitgetLauncher;
+    use crate::exchange::mexc::MexcLauncher;
+    use crate::exchange::bitmart::BitmartLauncher;
+    use crate::exchange::kraken::KrakenLauncher;
+    use crate::exchange::ourbit::OurbitLauncher;
     use crate::exchange::Exchange;
 
     // Binance
@@ -43,6 +52,51 @@ pub async fn launch_all(tx: Sender<UnifiedTicker>) {
         let mut bitget = BitgetLauncher;
         if let Err(e) = bitget.connect(tx_bitget).await {
             log::error!("Bitget launch failed: {}", e);
+        }
+    });
+
+    // MEXC
+    let tx_mexc = tx.clone();
+    tokio::spawn(async move {
+        let mut mexc = MexcLauncher;
+        if let Err(e) = mexc.connect(tx_mexc).await {
+            log::error!("MEXC launch failed: {}", e);
+        }
+    });
+
+    // Bitmart
+    let tx_bitmart = tx.clone();
+    tokio::spawn(async move {
+        let mut bitmart = BitmartLauncher;
+        if let Err(e) = bitmart.connect(tx_bitmart).await {
+            log::error!("Bitmart launch failed: {}", e);
+        }
+    });
+
+    // Kraken
+    let tx_kraken = tx.clone();
+    tokio::spawn(async move {
+        let mut kraken = KrakenLauncher;
+        if let Err(e) = kraken.connect(tx_kraken).await {
+            log::error!("Kraken launch failed: {}", e);
+        }
+    });
+
+    // Ourbit
+    let tx_ourbit = tx.clone();
+    tokio::spawn(async move {
+        let mut ourbit = OurbitLauncher;
+        if let Err(e) = ourbit.connect(tx_ourbit).await {
+            log::error!("Ourbit launch failed: {}", e);
+        }
+    });
+
+    // Gate.io
+    let tx_gate = tx.clone();
+    tokio::spawn(async move {
+        let mut gate = crate::exchange::gate::GateLauncher;
+        if let Err(e) = gate.connect(tx_gate).await {
+            log::error!("Gate launch failed: {}", e);
         }
     });
 }

@@ -22,27 +22,52 @@ impl RiskManager {
         status_map: &HashMap<ExchangeId, AssetStatus>,
         market_filters: &HashMap<ExchangeId, HashMap<String, crate::model::SymbolMarketFilters>>,
         ticker_timestamps: &HashMap<ExchangeId, i64>,
+        account_state: &crate::model::GlobalAccountState,
         target_volume_usdt: Decimal, 
     ) -> Result<(), RiskError> {
         
         // 1. Check Wallet Status
         self.check_wallet_status(opp, status_map)?;
 
-        // 2. Check Timestamp Drift (Stale Data Guard)
+        // 2. Check Liquidation Risk (Margin Ratio < 80%)
+        self.check_margin_ratio(opp, account_state)?;
+
+        // 3. Check Timestamp Drift (Stale Data Guard)
         self.check_timestamp_drift(ticker_timestamps, 500)?;
 
-        // 3. Check Trading Status
+        // 4. Check Trading Status
         self.check_trading_status(opp, market_filters)?;
 
-        // 4. Check Min Notional Guard
+        // 5. Check Min Notional Guard
         self.check_min_notional(opp, market_filters, target_volume_usdt)?;
 
-        // 3. Check Liquidity / Slippage
+        // 6. Check Liquidity / Slippage
         self.check_liquidity(opp, depth_map, target_volume_usdt)?;
 
-        // 3. Check Funding Rate
+        // 7. Check Funding Rate
         self.check_funding(opp, funding_map)?;
 
+        Ok(())
+    }
+
+    fn check_margin_ratio(
+        &self,
+        opp: &ArbitrageOpportunity,
+        account_state: &crate::model::GlobalAccountState,
+    ) -> Result<(), RiskError> {
+        let threshold = Decimal::new(8, 1); // 0.8 (80%)
+
+        // Check both exchanges
+        for eid in &[opp.long_exchange, opp.short_exchange] {
+            if let Some(exchange_state) = account_state.exchange_states.get(eid) {
+                if exchange_state.margin_ratio > threshold {
+                    return Err(RiskError::LiquidationRisk(format!(
+                        "{} Margin Ratio too high: {:.2}% > {:.2}%",
+                        eid, exchange_state.margin_ratio * Decimal::from(100), threshold * Decimal::from(100)
+                    )));
+                }
+            }
+        }
         Ok(())
     }
 

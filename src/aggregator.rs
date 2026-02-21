@@ -15,6 +15,8 @@ pub struct Aggregator {
     funding_rates: Arc<Mutex<HashMap<ExchangeId, HashMap<String, FundingInfo>>>>,
     market_filters: Arc<Mutex<HashMap<ExchangeId, HashMap<String, crate::model::SymbolMarketFilters>>>>,
     account_state: Arc<Mutex<crate::model::GlobalAccountState>>,
+    rebalance_advisor: crate::rebalance_advisor::RebalanceAdvisor,
+    last_rebalance_advice: Arc<Mutex<Vec<crate::model::RebalanceAdvice>>>,
     notifier: Arc<TelegramNotifier>,
     // Symbol -> Exchange -> Ticker
     market_data: HashMap<String, HashMap<ExchangeId, UnifiedTicker>>,
@@ -39,6 +41,8 @@ impl Aggregator {
             funding_rates,
             market_filters,
             account_state,
+            rebalance_advisor: crate::rebalance_advisor::RebalanceAdvisor::new(),
+            last_rebalance_advice: Arc::new(Mutex::new(Vec::new())),
             notifier,
             market_data: HashMap::new(),
         }
@@ -57,6 +61,7 @@ impl Aggregator {
                 }
                 _ = interval.tick() => {
                     self.print_arbitrage_matrix();
+                    self.check_rebalancing().await;
                 }
             }
         }
@@ -87,6 +92,12 @@ impl Aggregator {
                 if long.exchange == short.exchange { return; }
 
                 if let (Some(b_long), Some(b_short)) = (long.best_ask(), short.best_bid()) {
+                    let floor = Decimal::new(1, 4); // 0.0001
+                    if b_long.0 < floor || b_short.0 < floor { return; }
+
+                    let price_ratio = if b_long.0 > b_short.0 { b_long.0 / b_short.0 } else { b_short.0 / b_long.0 };
+                    if price_ratio > Decimal::from(2) { return; }
+
                     let gross_spread = (b_short.0 - b_long.0) / b_long.0 * Decimal::from(100);
                     
                     let fee_long = long.exchange.taker_fee();
@@ -98,8 +109,9 @@ impl Aggregator {
 
                     // User requested 5.0%+ spread
                     let threshold = Decimal::from(5); // 5.0%
+                    let max_sanity = Decimal::from(50); // 50% max
                     
-                    if net_spread >= threshold {
+                    if net_spread >= threshold && net_spread < max_sanity {
                         // Prepare Risk Data
                         let target_volume = Decimal::from(1000); // 1000 USDT target
                         
@@ -131,6 +143,8 @@ impl Aggregator {
                         ticker_timestamps.insert(long.exchange, long.timestamp);
                         ticker_timestamps.insert(short.exchange, short.timestamp);
 
+                        let account_state = self.account_state.lock().unwrap();
+
                         // Validate
                         match self.risk_manager.validate(&ArbitrageOpportunity {
                             symbol: symbol.to_string(),
@@ -140,7 +154,7 @@ impl Aggregator {
                             short_price: b_short.0,
                             spread_pct: net_spread,
                             _timestamp: chrono::Utc::now().timestamp_millis(),
-                        }, &depth_map, &funding_map, &status_map, &r_filters, &ticker_timestamps, target_volume).await {
+                        }, &depth_map, &funding_map, &status_map, &r_filters, &ticker_timestamps, &account_state, target_volume).await {
                             Ok(_) => {
                                 let opp = ArbitrageOpportunity {
                                     symbol: symbol.to_string(),
@@ -214,6 +228,23 @@ impl Aggregator {
         for (symbol, exchanges) in &self.market_data {
             if exchanges.len() < 2 { continue; }
 
+            // Trading Status Check
+            {
+                let filters = self.market_filters.lock().unwrap();
+                let mut all_tradable = true;
+                for (eid, _) in exchanges {
+                    if let Some(ef) = filters.get(eid) {
+                        if let Some(f) = ef.get(symbol) {
+                            if !f.is_trading {
+                                all_tradable = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if !all_tradable { continue; }
+            }
+
             let best_long = exchanges.values()
                 .min_by(|a, b| a.best_ask().map(|x| x.0).unwrap_or(Decimal::MAX).partial_cmp(&b.best_ask().map(|x| x.0).unwrap_or(Decimal::MAX)).unwrap_or(std::cmp::Ordering::Equal));
             
@@ -224,6 +255,14 @@ impl Aggregator {
                 if long.exchange == short.exchange { continue; }
 
                 if let (Some(b_long), Some(b_short)) = (long.best_ask(), short.best_bid()) {
+                    let floor = Decimal::new(1, 4); // 0.0001 USDT floor
+                    if b_long.0 < floor || b_short.0 < floor { continue; }
+
+                    // Magnitude Check: Filter out unit mismatches (1:1000 etc) or different coins
+                    // Price ratio > 2.0x difference is almost always a unit or coin mismatch
+                    let price_ratio = if b_long.0 > b_short.0 { b_long.0 / b_short.0 } else { b_short.0 / b_long.0 };
+                    if price_ratio > Decimal::from(2) { continue; }
+
                     let gross_spread = (b_short.0 - b_long.0) / b_long.0 * Decimal::from(100);
                     
                     let fee_long = long.exchange.taker_fee();
@@ -233,7 +272,7 @@ impl Aggregator {
                     let total_cost_pct = (fee_long + fee_short + slippage) * Decimal::from(100);
                     let net_spread = gross_spread - total_cost_pct;
 
-                    if gross_spread > Decimal::from(-1) { 
+                    if gross_spread > Decimal::from(-1) && gross_spread < Decimal::from(50) { 
                         opportunities.push((
                             symbol.clone(),
                             long.exchange, b_long.0,
@@ -259,12 +298,12 @@ impl Aggregator {
             Cell::new("Status"),
         ]));
 
-        // Limit table to 10 rows to fit screen
-        for (sym, l_ex, l_p, s_ex, s_p, gross, net) in opportunities.into_iter().take(10) {
+        // Limit table to 5 rows to avoid UI overlap
+        for (sym, l_ex, l_p, s_ex, s_p, gross, net) in opportunities.into_iter().take(5) {
             let status = if net > Decimal::from(0) { "PROFITABLE" } else { "Loss" };
             table.add_row(Row::new(vec![
                 Cell::new(&sym),
-                Cell::new(&format!("{} @ {:.4}", l_ex, l_p)), // Compact numbers
+                Cell::new(&format!("{} @ {:.4}", l_ex, l_p)),
                 Cell::new(&format!("{} @ {:.4}", s_ex, s_p)),
                 Cell::new(&format!("{:.2}%", gross)),
                 Cell::new(&format!("{:.2}%", net)),
@@ -274,9 +313,19 @@ impl Aggregator {
 
         table.printstd();
 
-        // Position Logs at fixed line (e.g., line 16)
-        // Table (1header + 10rows + 2separators) takes ~14 lines.
-        let _ = execute!(stdout, MoveTo(0, 16));
+        // 3. Show Rebalance Advice
+        if let Ok(advices) = self.last_rebalance_advice.lock() {
+            if !advices.is_empty() {
+                println!("\n⚠️  REBALANCE REQUIRED:");
+                for a in advices.iter() {
+                    println!("   - Move ${:.0} from {} to {} ({})", a.amount_usdt, a.from_exchange, a.to_exchange, a.reason);
+                }
+            }
+        }
+
+        // Position Logs at fixed line (e.g., line 12)
+        // Header + balance + 5 rows + 1 advice = ~12 lines
+        let _ = execute!(stdout, MoveTo(0, 14));
         println!("=== RECENT ACTIVITY (Last 5) ===");
         if let Ok(logs) = self.log_buffer.lock() {
             let start = if logs.len() > 5 { logs.len() - 5 } else { 0 };
@@ -289,5 +338,38 @@ impl Aggregator {
         
         // Clear anything below logs
         let _ = execute!(stdout, Clear(ClearType::FromCursorDown));
+    }
+
+    async fn check_rebalancing(&self) {
+        let state = {
+            let s = self.account_state.lock().unwrap();
+            s.clone()
+        };
+
+        let advices = self.rebalance_advisor.check(&state);
+        
+        // Store for TUI
+        {
+            let mut last = self.last_rebalance_advice.lock().unwrap();
+            *last = advices.clone();
+        }
+
+        for advice in advices {
+            let msg = format!(
+                "⚖️ *Rebalance Suggestion*\n\n\
+                *Reason*: {}\n\
+                *Action*: Move `${:.0} USDT` from **{}** to **{}**",
+                advice.reason, advice.amount_usdt, advice.from_exchange, advice.to_exchange
+            );
+            
+            // Log locally
+            info!("REBALANCE: {}", advice.reason);
+            
+            // Notify Telegram
+            let n = self.notifier.clone();
+            tokio::spawn(async move {
+                n.send_alert(&msg).await;
+            });
+        }
     }
 }
