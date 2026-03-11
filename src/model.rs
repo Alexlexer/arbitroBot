@@ -11,6 +11,7 @@ pub enum RiskError {
     _PrecisionMismatch(String),
     PriceDrift(String),
     MinNotionalFilter(String),
+    LiquidationRisk(String),
     ExchangeError(String),
 }
 
@@ -23,6 +24,7 @@ impl fmt::Display for RiskError {
             RiskError::_PrecisionMismatch(msg) => write!(f, "Precision Risk: {}", msg),
             RiskError::PriceDrift(msg) => write!(f, "Price Drift: {}", msg),
             RiskError::MinNotionalFilter(msg) => write!(f, "Min Notional Risk: {}", msg),
+            RiskError::LiquidationRisk(msg) => write!(f, "Liquidation Risk: {}", msg),
             RiskError::ExchangeError(msg) => write!(f, "Exchange Error: {}", msg),
         }
     }
@@ -58,6 +60,10 @@ pub enum ExchangeId {
     Binance,
     Bybit,
     Bitget,
+    MEXC,
+    Bitmart,
+    Kraken,
+    Ourbit,
     Gate,
     Okx,
 }
@@ -67,9 +73,13 @@ impl ExchangeId {
         match self {
             ExchangeId::Binance => Decimal::new(5, 4), // 0.0005 (0.05%)
             ExchangeId::Bybit => Decimal::new(6, 4),   // 0.0006 (0.06%)
-            ExchangeId::Bitget => Decimal::new(6, 4),  // 0.0006 (0.06%)
-            ExchangeId::Gate => Decimal::new(5, 4),    // 0.0005
-            ExchangeId::Okx => Decimal::new(5, 4),     // 0.0005
+            ExchangeId::Bitget => Decimal::new(6, 4), // 0.06%
+            ExchangeId::MEXC => Decimal::new(1, 3),   // 0.1%
+            ExchangeId::Bitmart => Decimal::new(1, 3), // 0.1%
+            ExchangeId::Kraken => Decimal::new(2, 3),  // 0.2%
+            ExchangeId::Ourbit => Decimal::new(1, 3),  // 0.1%
+            ExchangeId::Gate => Decimal::new(5, 4),    // 0.05%
+            ExchangeId::Okx => Decimal::new(5, 4),     // 0.05%
         }
     }
 }
@@ -120,6 +130,7 @@ pub struct GlobalAccountState {
     pub total_equity_usdt: Decimal,
     pub total_unrealized_pnl: Decimal,
     pub exchange_states: HashMap<ExchangeId, ExchangeAccountState>,
+    pub asset_statuses: HashMap<ExchangeId, HashMap<String, AssetStatus>>,
 }
 
 #[derive(Debug, Clone)]
@@ -131,4 +142,22 @@ pub struct ArbitrageOpportunity {
     pub short_price: Decimal,
     pub spread_pct: Decimal,
     pub _timestamp: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RebalanceAdvice {
+    pub from_exchange: ExchangeId,
+    pub to_exchange: ExchangeId,
+    pub amount_usdt: Decimal, // Recommended transfer
+    pub reason: String,
+}
+pub fn normalize_symbol(s: &str) -> String {
+    s.to_uppercase()
+        .replace("XBT", "BTC")
+        .replace("_USDT", "")
+        .replace("USDT", "")
+        .replace("USD", "")
+        .replace("_", "")
+        .replace("-", "")
+        .replace("/", "")
 }

@@ -7,6 +7,9 @@ mod risk_manager;
 mod poller;
 mod notifier;
 mod rate_limiter;
+mod rebalance_advisor;
+mod config;
+mod messaging;
 
 use aggregator::Aggregator;
 use execution::ExecutionActor;
@@ -20,6 +23,12 @@ async fn main() {
     // Load Environment Variables
     dotenvy::dotenv().ok();
 
+    // Load Configuration
+    let config = config::AppConfig::load();
+
+    // Initialize Messaging (RabbitMQ)
+    let messaging = messaging::init_messaging().await;
+
     // Setup Buffer Logger
     let log_capacity = 20;
     let logger = logger::BufferLogger::new(log_capacity);
@@ -28,6 +37,7 @@ async fn main() {
 
     // Setup Risk, Poller, Notifier & RateLimiter
     let risk_manager = risk_manager::RiskManager::new();
+    let rebalance_advisor = rebalance_advisor::RebalanceAdvisor::new(&config);
     let rate_limiter = Arc::new(RateLimiter::new());
     let poller = poller::DataPoller::new(rate_limiter.clone());
     let funding_rates = poller.funding_rates.clone();
@@ -67,6 +77,6 @@ async fn main() {
 
     // Run Aggregator (Main Thread)
     let account_state = poller_handle.account_state.clone();
-    let mut aggregator = Aggregator::new(rx, exec_tx, log_buffer, risk_manager, funding_rates, market_filters, account_state, notifier);
+    let mut aggregator = Aggregator::new(rx, exec_tx, log_buffer, risk_manager, rebalance_advisor, funding_rates, market_filters, account_state, notifier, messaging);
     aggregator.run().await;
 }

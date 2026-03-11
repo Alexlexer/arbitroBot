@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  arbitro-bot:
+    build: .
+    container_name: arbitro-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    # Only need network access to reach exchange APIs
+    network_mode: bridge

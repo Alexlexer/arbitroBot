@@ -1,0 +1,39 @@
+    Checking arbit_hub v0.1.0 (C:\Dev\ArbitBotBM\arbit_hub)
+error[E0382]: borrow of moved value: `ticker`
+  --> src\aggregator.rs:84:54
+   |
+75 |     async fn update_market_data(&mut self, ticker: UnifiedTicker) {
+   |                                            ------ move occurs because `ticker` has type `UnifiedTicker`, which does not implement the `Copy` trait
+...
+78 |         entry.insert(ticker.exchange, ticker);
+   |                                       ------ value moved here
+...
+84 |         self.broadcast_message(&format!("ticker.{}", ticker.exchange), &ticker).await;
+   |                                                      ^^^^^^^^^^^^^^^ value borrowed here after move
+   |
+   = note: this error originates in the macro `$crate::__export::format_args` which comes from the expansion of the macro `format` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider cloning the value if the performance cost is acceptable
+   |
+78 |         entry.insert(ticker.exchange, ticker.clone());
+   |                                             ++++++++
+
+error[E0599]: no function or associated item named `from_str` found for struct `OpenConnectionArguments` in the current scope
+   --> src\messaging.rs:17:45
+    |
+17  |         let args = OpenConnectionArguments::from_str(url)?;
+    |                                             ^^^^^^^^ function or associated item not found in `OpenConnectionArguments`
+    |
+note: if you're trying to build a new `OpenConnectionArguments`, consider using `OpenConnectionArguments::new` which returns `OpenConnectionArguments`
+   --> C:\Users\AlexK\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\amqprs-2.1.3\src\api\connection.rs:329:5
+    |
+329 |     pub fn new(host: &str, port: u16, username: &str, password: &str) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: there is an associated function `from` with a similar name
+    |
+17  -         let args = OpenConnectionArguments::from_str(url)?;
+17  +         let args = OpenConnectionArguments::from(url)?;
+    |
+
+Some errors have detailed explanations: E0382, E0599.
+For more information about an error, try `rustc --explain E0382`.
+error: could not compile `arbit_hub` (bin "arbit_hub") due to 2 previous errors
