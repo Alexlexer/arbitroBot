@@ -121,37 +121,26 @@ impl RiskManager {
         opp: &ArbitrageOpportunity,
         funding_map: &HashMap<ExchangeId, FundingInfo>,
     ) -> Result<(), RiskError> {
-        // Funding usually paid every 8h. 
-        // Long pays if Funding > 0. Short pays if Funding < 0.
-        // Net Funding Cost = (Long_Rate + Short_Rate_reversed)
-        // If we Long X and Short Y:
-        // Cost Long = Rate_X (if positive, we pay. if negative, we receive)
-        // Cost Short = -Rate_Y (if positive, we receive. if negative, we pay)
-        
         let zero = Decimal::ZERO;
         let funding_long = funding_map.get(&opp.long_exchange).map(|f| f.rate_pct).unwrap_or(zero);
         let funding_short = funding_map.get(&opp.short_exchange).map(|f| f.rate_pct).unwrap_or(zero);
 
-        // Predicted funding for 24h (3 payments)
-        // Cost = (Rate_L - Rate_S) * 3 ? 
-        // Example: 
-        // Long X (Rate +0.01%): We pay 0.01%
-        // Short Y (Rate +0.01%): We receive 0.01%
-        // Net = 0.
-        // Long X (Rate -0.01%): We receive 0.01%
-        // Short Y (Rate -0.03%): We pay 0.03%
-        // Net Payment = 0.02%
+        let net_funding_per_8h = (funding_long - funding_short).abs();
 
-        let net_funding_per_interval = funding_long - funding_short;
-        let net_funding_24h = net_funding_per_interval.abs() * Decimal::from(3);
-
-        let threshold = opp.spread_pct.abs() * Decimal::new(5, 1); // 50% of spread
-
-        if net_funding_24h > threshold {
-             return Err(RiskError::HighFundingLoss(format!(
-                 "Predicted 24h Funding Impact: {}% > Threshold {}%", 
-                 net_funding_24h, threshold
-             )));
+        if net_funding_per_8h > Decimal::ZERO {
+            // How many intervals can we survive before funding eats our entire Net Spread?
+            let intervals_to_breakeven = opp.spread_pct / net_funding_per_8h;
+            let hours_to_breakeven = intervals_to_breakeven * Decimal::from(8);
+            
+            // Safety check: We must have at least 72 hours (3 days) of buffer
+            let min_safe_hours = Decimal::from(72); 
+            
+            if hours_to_breakeven < min_safe_hours {
+                return Err(RiskError::HighFundingLoss(format!(
+                    "Trade will become unprofitable in {:.1} hours due to funding costs. Min required: {}h", 
+                    hours_to_breakeven, min_safe_hours
+                )));
+            }
         }
 
         Ok(())

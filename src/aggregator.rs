@@ -106,11 +106,11 @@ impl Aggregator {
 
                     let gross_spread = (b_short.0 - b_long.0) / b_long.0 * Decimal::from(100);
                     
-                    let fee_long = long.exchange.taker_fee();
-                    let fee_short = short.exchange.taker_fee();
-                    let slippage = Decimal::new(1, 3); // 0.1% buffer
+                    let fee_long_total = long.exchange.taker_fee() * Decimal::from(2); // Open + Close
+                    let fee_short_total = short.exchange.taker_fee() * Decimal::from(2); // Open + Close
+                    let slippage_total = Decimal::new(2, 3); // 0.2% total buffer (0.1% entry + 0.1% exit)
 
-                    let total_cost_pct = (fee_long + fee_short + slippage) * Decimal::from(100);
+                    let total_cost_pct = (fee_long_total + fee_short_total + slippage_total) * Decimal::from(100);
                     let net_spread = gross_spread - total_cost_pct;
 
                     // User requested 5.0%+ spread
@@ -120,6 +120,10 @@ impl Aggregator {
                     if net_spread >= threshold && net_spread < max_sanity {
                         // Prepare Risk Data
                         let target_volume = Decimal::from(1000); // 1000 USDT target
+                        
+                        // Rebalancing Transfer Costs: must make at least $2 net profit after spread
+                        let expected_profit_usdt = target_volume * (net_spread / Decimal::from(100));
+                        if expected_profit_usdt <= Decimal::from(2) { return; }
                         
                         let mut depth_map = HashMap::new();
                         depth_map.insert(long.exchange, crate::model::OrderBookDepth { bids: long.bids.clone(), asks: long.asks.clone() });
@@ -271,11 +275,11 @@ impl Aggregator {
 
                     let gross_spread = (b_short.0 - b_long.0) / b_long.0 * Decimal::from(100);
                     
-                    let fee_long = long.exchange.taker_fee();
-                    let fee_short = short.exchange.taker_fee();
-                    let slippage = Decimal::new(1, 3); // 0.1% buffer
+                    let fee_long_total = long.exchange.taker_fee() * Decimal::from(2); // Open + Close
+                    let fee_short_total = short.exchange.taker_fee() * Decimal::from(2); // Open + Close
+                    let slippage_total = Decimal::new(2, 3); // 0.2% total buffer (0.1% entry + 0.1% exit)
                     
-                    let total_cost_pct = (fee_long + fee_short + slippage) * Decimal::from(100);
+                    let total_cost_pct = (fee_long_total + fee_short_total + slippage_total) * Decimal::from(100);
                     let net_spread = gross_spread - total_cost_pct;
 
                     if gross_spread > Decimal::from(-1) && gross_spread < Decimal::from(50) { 
