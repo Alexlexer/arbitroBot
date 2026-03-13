@@ -1,5 +1,5 @@
 # Use the official Rust image as the build stage
-FROM rust:1.80 as builder
+FROM rust:1.83 as builder
 
 # Create a new empty shell project
 WORKDIR /usr/src/arbitroBot

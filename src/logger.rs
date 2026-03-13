@@ -40,7 +40,8 @@ impl log::Log for BufferLogger {
             if logs.len() >= self.capacity {
                 logs.pop_front();
             }
-            logs.push_back(msg);
+            logs.push_back(msg.clone());
+            println!("{}", msg);
         }
     }
 

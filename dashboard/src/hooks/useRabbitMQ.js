@@ -7,15 +7,35 @@ export const useRabbitMQ = () => {
   const [isConnected, setIsConnected] = useState(false);
   const clientRef = useRef(null);
 
+  // Cleanup stale tickers every 10s
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setTickers((prev) => {
+        const fresh = {};
+        let changed = false;
+        Object.entries(prev).forEach(([key, ticker]) => {
+          if (now - ticker.timestamp < 60000) {
+            fresh[key] = ticker;
+          } else {
+            changed = true;
+          }
+        });
+        return changed ? fresh : prev;
+      });
+    }, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
   useEffect(() => {
     const client = new Client({
-      brokerURL: 'ws://localhost:15674/ws',
+      brokerURL: 'ws://127.0.0.1:15674/ws',
       connectHeaders: {
         login: 'guest',
         passcode: 'guest',
       },
       debug: (str) => {
-        // console.log(str);
+        console.log('STOMP Debug:', str);
       },
       reconnectDelay: 5000,
       heartbeatIncoming: 4000,
@@ -23,10 +43,14 @@ export const useRabbitMQ = () => {
     });
 
     client.onConnect = () => {
+      console.log('Connected to WebStomp');
       setIsConnected(true);
+      
       // Subscribe to all tickers
-      client.subscribe('/topic/arbit_hub.ticker.*', (message) => {
+      // Format: /exchange/arbit_hub/ticker.<exchange>
+      client.subscribe('/exchange/arbit_hub/ticker.*', (message) => {
         const ticker = JSON.parse(message.body);
+        console.log('Ticker received:', ticker.symbol, ticker.exchange);
         setTickers((prev) => ({
           ...prev,
           [`${ticker.exchange}-${ticker.symbol}`]: ticker,
@@ -34,13 +58,19 @@ export const useRabbitMQ = () => {
       });
 
       // Subscribe to account state
-      client.subscribe('/topic/arbit_hub.account.state', (message) => {
+      client.subscribe('/exchange/arbit_hub/account.state', (message) => {
+        console.log('Account state received');
         setAccountState(JSON.parse(message.body));
       });
     };
 
-    client.onDisconnect = () => {
-      setIsConnected(false);
+    client.onStompError = (frame) => {
+      console.error('Broker reported error: ' + frame.headers['message']);
+      console.error('Additional details: ' + frame.body);
+    };
+
+    client.onWebSocketError = (event) => {
+      console.error('WebSocket Error', event);
     };
 
     client.activate();

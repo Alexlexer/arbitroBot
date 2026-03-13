@@ -1,11 +1,33 @@
-version: '3.8'
-
 services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+      - "15674:15674"
+    environment:
+      - RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS=-rabbit allow_loopback_users false
+    command: >
+      sh -c "rabbitmq-plugins enable --offline rabbitmq_web_stomp && rabbitmq-server"
+
   arbitro-bot:
     build: .
     container_name: arbitro-bot
     restart: unless-stopped
     env_file:
       - .env
-    # Only need network access to reach exchange APIs
-    network_mode: bridge
+    depends_on:
+      - rabbitmq
+    environment:
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+
+  dashboard:
+    build:
+      context: ./dashboard
+    container_name: arbitro-dashboard
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      - rabbitmq

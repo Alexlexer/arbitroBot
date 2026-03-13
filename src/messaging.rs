@@ -22,7 +22,12 @@ impl RabbitMQClient {
         channel.register_callback(DefaultChannelCallback).await?;
 
         // Declare main exchange
-        channel.exchange_declare(ExchangeDeclareArguments::new("arbit_hub", "topic")).await?;
+        channel.exchange_declare(
+            ExchangeDeclareArguments::new("arbit_hub", "topic")
+                .durable(true)
+                .auto_delete(false)
+                .finish(),
+        ).await?;
 
         Ok(Self { connection, channel })
     }
@@ -40,14 +45,24 @@ pub type SharedMessaging = Arc<Mutex<Option<RabbitMQClient>>>;
 
 pub async fn init_messaging() -> SharedMessaging {
     let url = std::env::var("RABBITMQ_URL").unwrap_or_else(|_| "amqp://guest:guest@localhost:5672/".to_string());
-    match RabbitMQClient::new(&url).await {
-        Ok(client) => {
-            info!("Connected to RabbitMQ at {}", url);
-            Arc::new(Mutex::new(Some(client)))
-        }
-        Err(e) => {
-            error!("Failed to connect to RabbitMQ: {}. Messaging will be disabled.", e);
-            Arc::new(Mutex::new(None))
+    
+    let mut retry_count = 0;
+    let max_retries = 10;
+    
+    while retry_count < max_retries {
+        match RabbitMQClient::new(&url).await {
+            Ok(client) => {
+                info!("Connected to RabbitMQ at {}", url);
+                return Arc::new(Mutex::new(Some(client)));
+            }
+            Err(e) => {
+                retry_count += 1;
+                error!("Failed to connect to RabbitMQ (attempt {}/{}): {}. Retrying in 2s...", retry_count, max_retries, e);
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            }
         }
     }
+
+    error!("Failed to connect to RabbitMQ after {} attempts. Messaging will be disabled.", max_retries);
+    Arc::new(Mutex::new(None))
 }

@@ -8,7 +8,7 @@ function App() {
   const { tickers, accountState, isConnected } = useRabbitMQ();
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-200 selection:bg-indigo-500 selection:text-white pb-20">
+    <div className="h-screen overflow-hidden bg-slate-950 text-slate-200 selection:bg-indigo-500 selection:text-white">
       {/* Dynamic Background */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden">
         <div className="absolute -top-24 -left-24 w-96 h-96 bg-indigo-600/10 rounded-full blur-[120px]" />

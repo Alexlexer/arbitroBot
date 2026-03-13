@@ -3,6 +3,7 @@ use crate::risk_manager::RiskManager;
 use crate::notifier::TelegramNotifier;
 use log::{info, error};
 use rust_decimal::Decimal;
+use std::str::FromStr;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -98,11 +99,21 @@ impl Aggregator {
                 if long.exchange == short.exchange { return; }
 
                 if let (Some(b_long), Some(b_short)) = (long.best_ask(), short.best_bid()) {
-                    let floor = Decimal::new(1, 4); // 0.0001
-                    if b_long.0 < floor || b_short.0 < floor { return; }
+                    let floor = Decimal::from_str("0.00000001").unwrap();
+                    if b_long.0 <= floor || b_short.0 <= floor { return; }
 
                     let price_ratio = if b_long.0 > b_short.0 { b_long.0 / b_short.0 } else { b_short.0 / b_long.0 };
-                    if price_ratio > Decimal::from(2) { return; }
+                    if price_ratio > Decimal::from_str("1.1").unwrap() { 
+                        info!("REJECT {}: Price ratio too high ({:.2}x)", symbol, price_ratio);
+                        return; 
+                    }
+
+                    // Freshness Check: ignore if data is older than 15s
+                    let now = chrono::Utc::now().timestamp_millis();
+                    if now - long.timestamp > 15000 || now - short.timestamp > 15000 {
+                        info!("REJECT {}: Stale data (L: {}ms, S: {}ms ago)", symbol, now - long.timestamp, now - short.timestamp);
+                        return;
+                    }
 
                     let gross_spread = (b_short.0 - b_long.0) / b_long.0 * Decimal::from(100);
                     
@@ -265,13 +276,17 @@ impl Aggregator {
                 if long.exchange == short.exchange { continue; }
 
                 if let (Some(b_long), Some(b_short)) = (long.best_ask(), short.best_bid()) {
-                    let floor = Decimal::new(1, 4); // 0.0001 USDT floor
-                    if b_long.0 < floor || b_short.0 < floor { continue; }
+                    let floor = Decimal::from_str("0.00000001").unwrap();
+                    if b_long.0 <= floor || b_short.0 <= floor { continue; }
 
                     // Magnitude Check: Filter out unit mismatches (1:1000 etc) or different coins
                     // Price ratio > 2.0x difference is almost always a unit or coin mismatch
                     let price_ratio = if b_long.0 > b_short.0 { b_long.0 / b_short.0 } else { b_short.0 / b_long.0 };
-                    if price_ratio > Decimal::from(2) { continue; }
+                    if price_ratio > Decimal::from_str("1.1").unwrap() { continue; }
+
+                    // Freshness check for Matrix TUI
+                    let now = chrono::Utc::now().timestamp_millis();
+                    if now - long.timestamp > 15000 || now - short.timestamp > 15000 { continue; }
 
                     let gross_spread = (b_short.0 - b_long.0) / b_long.0 * Decimal::from(100);
                     

@@ -23,17 +23,17 @@ async fn main() {
     // Load Environment Variables
     dotenvy::dotenv().ok();
 
-    // Load Configuration
-    let config = config::AppConfig::load();
-
-    // Initialize Messaging (RabbitMQ)
-    let messaging = messaging::init_messaging().await;
-
     // Setup Buffer Logger
     let log_capacity = 20;
     let logger = logger::BufferLogger::new(log_capacity);
     let log_buffer = logger.logs.clone(); // Clone Arc
     logger.init().unwrap(); // Set as global logger
+
+    // Load Configuration
+    let config = config::AppConfig::load();
+
+    // Initialize Messaging (RabbitMQ)
+    let messaging = messaging::init_messaging().await;
 
     // Setup Risk, Poller, Notifier & RateLimiter
     let risk_manager = risk_manager::RiskManager::new();
