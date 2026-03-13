@@ -1,7 +1,10 @@
-import React from 'react';
-import { Wallet, Info, Activity } from 'lucide-react';
+import React, { useState } from 'react';
+import { Wallet, Info, Activity, ChevronDown } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 const AccountSummary = ({ state, isConnected, tickers, botConfig }) => {
+    const [isExchangesExpanded, setIsExchangesExpanded] = useState(true);
+
     if (!state) return (
         <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl border border-slate-800 p-8 flex flex-col items-center justify-center min-h-[300px] text-slate-500">
             <Activity className="w-12 h-12 mb-4 animate-pulse" />
@@ -43,56 +46,78 @@ const AccountSummary = ({ state, isConnected, tickers, botConfig }) => {
             </div>
 
             {/* Exchange Breakdown/Health */}
-            <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl border border-slate-800 p-6">
-                <div className="flex items-center gap-2 mb-6 text-slate-400">
-                    <span className="p-1 px-2 rounded-md bg-slate-800 text-[10px] font-bold">INFO</span>
-                    <h3 className="text-sm font-bold uppercase tracking-widest">Exchanges</h3>
-                </div>
-                <div className="grid grid-cols-1 gap-3">
-                    {exchanges.map((ex) => {
-                        const s = state.exchange_states[ex];
-                        const isEnabled = botConfig?.enabled_exchanges?.[ex] !== false;
-                        
-                        // Find latest ticker timestamp for this exchange
-                        const exchangeTickers = Object.values(tickers).filter(t => t.exchange === ex);
-                        const lastUpdate = exchangeTickers.length > 0 
-                            ? Math.max(...exchangeTickers.map(t => t.timestamp))
-                            : 0;
-                        const isStale = (now - lastUpdate) > 30000;
-                        const isConnected_ex = lastUpdate > 0 && !isStale;
+            <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl border border-slate-800 p-4 border-b-0 overflow-hidden">
+                <button 
+                    onClick={() => setIsExchangesExpanded(!isExchangesExpanded)}
+                    className="w-full flex items-center justify-between group py-2"
+                >
+                    <div className="flex items-center gap-2 text-slate-400">
+                        <span className="p-1 px-2 rounded-md bg-slate-800 text-[10px] font-bold group-hover:text-indigo-400 transition-colors">INFO</span>
+                        <h3 className="text-sm font-bold uppercase tracking-widest group-hover:text-white transition-colors">Exchanges</h3>
+                    </div>
+                    <motion.div
+                        animate={{ rotate: isExchangesExpanded ? 0 : -90 }}
+                        className="text-slate-500 group-hover:text-white transition-colors"
+                    >
+                        <ChevronDown className="w-5 h-5" />
+                    </motion.div>
+                </button>
+                
+                <AnimatePresence initial={false}>
+                    {isExchangesExpanded && (
+                        <motion.div
+                            initial={{ height: 0, opacity: 0, marginTop: 0 }}
+                            animate={{ height: 'auto', opacity: 1, marginTop: 16 }}
+                            exit={{ height: 0, opacity: 0, marginTop: 0 }}
+                            transition={{ duration: 0.3, ease: 'easeInOut' }}
+                            className="grid grid-cols-1 gap-3 overflow-hidden"
+                        >
+                            {exchanges.map((ex) => {
+                                const s = state.exchange_states[ex];
+                                const isEnabled = botConfig?.enabled_exchanges?.[ex] !== false;
+                                
+                                // Find latest ticker timestamp for this exchange
+                                const exchangeTickers = Object.values(tickers).filter(t => t.exchange === ex);
+                                const lastUpdate = exchangeTickers.length > 0 
+                                    ? Math.max(...exchangeTickers.map(t => t.timestamp))
+                                    : 0;
+                                const isStale = (now - lastUpdate) > 15000;
+                                const isConnected_ex = lastUpdate > 0 && !isStale;
 
-                        return (
-                            <div key={ex} className={`p-3 rounded-xl border transition-all ${
-                                isEnabled ? 'bg-slate-800/30 border-slate-800/50' : 'bg-slate-950/20 border-slate-900 opacity-60 grayscale'
-                            }`}>
-                                <div className="flex justify-between items-center mb-2">
-                                    <div className="flex items-center gap-2">
-                                        <div className={`w-1.5 h-1.5 rounded-full ${isConnected_ex ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
-                                        <div className="text-[10px] text-white uppercase font-black tabular-nums">{ex}</div>
-                                    </div>
-                                    <div className="text-[9px] font-mono font-bold text-slate-500">
-                                        {lastUpdate > 0 ? `${((now - lastUpdate)/1000).toFixed(0)}s ago` : 'NO DATA'}
-                                    </div>
-                                </div>
-                                {s && (
-                                    <>
-                                        <div className="flex justify-between items-end">
-                                            <div className="text-sm font-bold text-slate-300 tabular-nums">${parseFloat(s.total_equity).toFixed(2)}</div>
-                                            <div className="text-[10px] text-slate-500 font-mono font-bold">M: {(parseFloat(s.margin_ratio) * 100).toFixed(1)}%</div>
+                                return (
+                                    <div key={ex} className={`p-3 rounded-xl border transition-all ${
+                                        isEnabled ? 'bg-slate-800/30 border-slate-800/50' : 'bg-slate-950/20 border-slate-900 opacity-60 grayscale'
+                                    }`}>
+                                        <div className="flex justify-between items-center mb-2">
+                                            <div className="flex items-center gap-2">
+                                                <div className={`w-1.5 h-1.5 rounded-full ${isConnected_ex ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+                                                <div className="text-[10px] text-white uppercase font-black tabular-nums">{ex}</div>
+                                            </div>
+                                            <div className="text-[9px] font-mono font-bold text-slate-500">
+                                                {lastUpdate > 0 ? `${((now - lastUpdate)/1000).toFixed(0)}s ago` : 'NO DATA'}
+                                            </div>
                                         </div>
-                                        <div className="w-full bg-slate-800 h-1 rounded-full mt-2 overflow-hidden">
-                                            <div
-                                                className={`h-full transition-all duration-1000 ${parseFloat(s.margin_ratio) > 0.7 ? 'bg-rose-500' : parseFloat(s.margin_ratio) > 0.4 ? 'bg-amber-500' : 'bg-emerald-500'
-                                                    }`}
-                                                style={{ width: `${(parseFloat(s.margin_ratio) * 100).toFixed(0)}%` }}
-                                            />
-                                        </div>
-                                    </>
-                                )}
-                            </div>
-                        );
-                    })}
-                </div>
+                                        {s && (
+                                            <>
+                                                <div className="flex justify-between items-end">
+                                                    <div className="text-sm font-bold text-slate-300 tabular-nums">${parseFloat(s.total_equity).toFixed(2)}</div>
+                                                    <div className="text-[10px] text-slate-500 font-mono font-bold">M: {(parseFloat(s.margin_ratio) * 100).toFixed(1)}%</div>
+                                                </div>
+                                                <div className="w-full bg-slate-800 h-1 rounded-full mt-2 overflow-hidden">
+                                                    <div
+                                                        className={`h-full transition-all duration-1000 ${parseFloat(s.margin_ratio) > 0.7 ? 'bg-rose-500' : parseFloat(s.margin_ratio) > 0.4 ? 'bg-amber-500' : 'bg-emerald-500'
+                                                            }`}
+                                                        style={{ width: `${(parseFloat(s.margin_ratio) * 100).toFixed(0)}%` }}
+                                                    />
+                                                </div>
+                                            </>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </motion.div>
+                    )}
+                </AnimatePresence>
             </div>
         </div>
     );
