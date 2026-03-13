@@ -151,6 +151,14 @@ pub struct RebalanceAdvice {
     pub amount_usdt: Decimal, // Recommended transfer
     pub reason: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum BotCommand {
+    UpdateSpread { threshold: Decimal },
+    ToggleExchange { exchange: ExchangeId, enabled: bool },
+}
+
 pub fn normalize_symbol(s: &str) -> String {
     s.to_uppercase()
         .replace("XBT", "BTC")

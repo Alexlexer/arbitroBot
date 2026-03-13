@@ -4,8 +4,18 @@ import { Client } from '@stomp/stompjs';
 export const useRabbitMQ = () => {
   const [tickers, setTickers] = useState({});
   const [accountState, setAccountState] = useState(null);
+  const [botConfig, setBotConfig] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
   const clientRef = useRef(null);
+
+  const sendBotCommand = (command) => {
+    if (clientRef.current && isConnected) {
+      clientRef.current.publish({
+        destination: '/exchange/arbit_hub/bot.commands',
+        body: JSON.stringify(command),
+      });
+    }
+  };
 
   // Cleanup stale tickers every 10s
   useEffect(() => {
@@ -62,6 +72,12 @@ export const useRabbitMQ = () => {
         console.log('Account state received');
         setAccountState(JSON.parse(message.body));
       });
+
+      // Subscribe to bot config
+      client.subscribe('/exchange/arbit_hub/bot.config', (message) => {
+        console.log('Bot config received');
+        setBotConfig(JSON.parse(message.body));
+      });
     };
 
     client.onStompError = (frame) => {
@@ -81,5 +97,5 @@ export const useRabbitMQ = () => {
     };
   }, []);
 
-  return { tickers, accountState, isConnected };
+  return { tickers, accountState, botConfig, isConnected, sendBotCommand };
 };

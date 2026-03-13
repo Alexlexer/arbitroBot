@@ -2,7 +2,7 @@ import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Zap, TrendingUp, TrendingDown } from 'lucide-react';
 
-const ArbitrageMatrix = ({ tickers }) => {
+const ArbitrageMatrix = ({ tickers, botConfig }) => {
     const [sortDirection, setSortDirection] = React.useState('desc'); // 'asc' or 'desc'
 
     const handleSortToggle = () => {
@@ -13,7 +13,7 @@ const ArbitrageMatrix = ({ tickers }) => {
     const grouped = groupBySymbol(tickers);
     const opportunities = Object.entries(grouped)
         .map(([symbol, exts]) => {
-            const { bestLong, bestShort, spread } = calculateSpread(exts);
+            const { bestLong, bestShort, spread } = calculateSpread(exts, botConfig);
             return { symbol, bestLong, bestShort, spread, exts };
         })
         .filter(opp => opp.bestLong && opp.bestShort);
@@ -100,16 +100,17 @@ const groupBySymbol = (tickers) => {
     }, {});
 };
 
-const calculateSpread = (exchanges) => {
+const calculateSpread = (exchanges, botConfig) => {
     if (exchanges.length < 2) return { bestLong: null, bestShort: null, spread: 0 };
 
     const now = Date.now();
-    // Get valid tickers: non-zero AND fresh (last 30s)
+    // Get valid tickers: non-zero AND fresh (last 30s) AND enabled in config
     const valid = exchanges.filter(e => {
         const ask = parseFloat(e.asks?.[0]?.[0]);
         const bid = parseFloat(e.bids?.[0]?.[0]);
         const isFresh = (now - e.timestamp) < 30000;
-        return ask > 0.00000001 && bid > 0.00000001 && isFresh;
+        const isEnabled = botConfig?.enabled_exchanges?.[e.exchange] !== false;
+        return ask > 0.00000001 && bid > 0.00000001 && isFresh && isEnabled;
     });
     
     if (valid.length < 2) return { bestLong: null, bestShort: null, spread: 0 };
@@ -126,6 +127,10 @@ const calculateSpread = (exchanges) => {
 
     const spread = ((shortPrice - longPrice) / longPrice) * 100;
     
+    // Threshold Guard: Only show if it meets the bot's minimum spread
+    const threshold = botConfig?.min_spread_threshold || 0;
+    if (spread < threshold) return { bestLong: null, bestShort: null, spread: 0 };
+
     // Final sanity check: no spreads > 100% in UI
     if (Math.abs(spread) > 100) return { bestLong: null, bestShort: null, spread: 0 };
 

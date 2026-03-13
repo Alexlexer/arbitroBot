@@ -2,10 +2,11 @@ import React from 'react';
 import { useRabbitMQ } from './hooks/useRabbitMQ';
 import ArbitrageMatrix from './components/ArbitrageMatrix';
 import AccountSummary from './components/AccountSummary';
+import BotConfig from './components/BotConfig';
 import { Bot, Terminal, ShieldCheck, Cpu } from 'lucide-react';
 
 function App() {
-  const { tickers, accountState, isConnected } = useRabbitMQ();
+  const { tickers, accountState, botConfig, isConnected, sendBotCommand } = useRabbitMQ();
 
   return (
     <div className="h-screen overflow-hidden bg-slate-950 text-slate-200 selection:bg-indigo-500 selection:text-white">
@@ -40,15 +41,16 @@ function App() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-6 mt-8 grid grid-cols-1 lg:grid-cols-12 gap-8 relative z-10">
-        {/* Left Column: Account Summary */}
+      <main className="max-w-7xl mx-auto px-6 mt-8 grid grid-cols-1 lg:grid-cols-12 gap-8 relative z-10 overflow-auto h-[calc(100vh-140px)] pb-20 scrollbar-hide">
+        {/* Left Column: Account Summary & Config */}
         <aside className="lg:col-span-4 flex flex-col gap-8">
           <AccountSummary state={accountState} isConnected={isConnected} />
+          <BotConfig config={botConfig} onCommand={sendBotCommand} />
         </aside>
 
         {/* Right Column: Main Matrix */}
         <section className="lg:col-span-8">
-          <ArbitrageMatrix tickers={tickers} />
+          <ArbitrageMatrix tickers={tickers} botConfig={botConfig} />
         </section>
       </main>
 

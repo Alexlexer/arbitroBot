@@ -9,6 +9,8 @@ pub struct AppConfig {
     pub concentration_threshold: Decimal, // 0.7 (70%)
     pub target_margin_ratio: Decimal,     // 0.2 (20%)
     pub polling_interval_ms: u64,         // 5000
+    pub min_spread_threshold: Decimal,    // 5.0 (5%)
+    pub enabled_exchanges: std::collections::HashMap<crate::model::ExchangeId, bool>,
 }
 
 impl AppConfig {
@@ -21,12 +23,26 @@ impl AppConfig {
         }
 
         // Default Sane Config
+        let mut enabled_exchanges = std::collections::HashMap::new();
+        use crate::model::ExchangeId as E;
+        enabled_exchanges.insert(E::Binance, true);
+        enabled_exchanges.insert(E::Bybit, true);
+        enabled_exchanges.insert(E::Bitget, true);
+        enabled_exchanges.insert(E::MEXC, true);
+        enabled_exchanges.insert(E::Bitmart, true);
+        enabled_exchanges.insert(E::Kraken, true);
+        enabled_exchanges.insert(E::Ourbit, true);
+        enabled_exchanges.insert(E::Gate, true);
+        enabled_exchanges.insert(E::Okx, true);
+
         Self {
             margin_threshold_low: Decimal::new(4, 1),
             margin_threshold_high: Decimal::new(7, 1),
             concentration_threshold: Decimal::new(7, 1),
             target_margin_ratio: Decimal::new(2, 1),
             polling_interval_ms: 5000,
+            min_spread_threshold: Decimal::from(5),
+            enabled_exchanges,
         }
     }
 

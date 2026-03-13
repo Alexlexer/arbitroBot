@@ -10,6 +10,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 
 pub struct Aggregator {
     rx: Receiver<UnifiedTicker>,
+    command_rx: Receiver<crate::model::BotCommand>,
     exec_tx: Sender<ArbitrageOpportunity>,
     log_buffer: Arc<Mutex<VecDeque<String>>>,
     risk_manager: RiskManager,
@@ -22,11 +23,13 @@ pub struct Aggregator {
     messaging: crate::messaging::SharedMessaging,
     // Symbol -> Exchange -> Ticker
     market_data: HashMap<String, HashMap<ExchangeId, UnifiedTicker>>,
+    config: crate::config::AppConfig,
 }
 
 impl Aggregator {
     pub fn new(
         rx: Receiver<UnifiedTicker>, 
+        command_rx: Receiver<crate::model::BotCommand>,
         exec_tx: Sender<ArbitrageOpportunity>,
         log_buffer: Arc<Mutex<VecDeque<String>>>,
         risk_manager: RiskManager,
@@ -36,9 +39,11 @@ impl Aggregator {
         account_state: Arc<Mutex<crate::model::GlobalAccountState>>,
         notifier: Arc<TelegramNotifier>,
         messaging: crate::messaging::SharedMessaging,
+        config: crate::config::AppConfig,
     ) -> Self {
         Self {
             rx,
+            command_rx,
             exec_tx,
             log_buffer,
             risk_manager,
@@ -50,7 +55,13 @@ impl Aggregator {
             notifier,
             messaging,
             market_data: HashMap::new(),
+            config,
         }
+    }
+
+    pub fn update_config(&mut self, config: crate::config::AppConfig) {
+        info!("Updating Aggregator config: Spread Threshold set to {:.2}%", config.min_spread_threshold);
+        self.config = config;
     }
 
     pub async fn run(&mut self) {
@@ -64,13 +75,33 @@ impl Aggregator {
                 Some(ticker) = self.rx.recv() => {
                     self.update_market_data(ticker).await;
                 }
+                Some(cmd) = self.command_rx.recv() => {
+                    self.handle_command(cmd).await;
+                }
                 _ = interval.tick() => {
                     self.print_arbitrage_matrix();
                     self.check_rebalancing().await;
                     self.broadcast_state().await;
+                    self.broadcast_config().await;
                 }
             }
         }
+    }
+
+    async fn handle_command(&mut self, cmd: crate::model::BotCommand) {
+        use crate::model::BotCommand;
+        match cmd {
+            BotCommand::UpdateSpread { threshold } => {
+                self.config.min_spread_threshold = threshold;
+                info!("COMMAND: Spread threshold updated to {:.2}%", threshold);
+            }
+            BotCommand::ToggleExchange { exchange, enabled } => {
+                self.config.enabled_exchanges.insert(exchange, enabled);
+                info!("COMMAND: Exchange {} toggled to {}", exchange, enabled);
+            }
+        }
+        let _ = self.config.save();
+        self.broadcast_config().await;
     }
 
     async fn update_market_data(&mut self, ticker: UnifiedTicker) {
@@ -124,11 +155,17 @@ impl Aggregator {
                     let total_cost_pct = (fee_long_total + fee_short_total + slippage_total) * Decimal::from(100);
                     let net_spread = gross_spread - total_cost_pct;
 
-                    // User requested 5.0%+ spread
-                    let threshold = Decimal::from(5); // 5.0%
+                    // Use config threshold
+                    let threshold = self.config.min_spread_threshold;
                     let max_sanity = Decimal::from(50); // 50% max
                     
                     if net_spread >= threshold && net_spread < max_sanity {
+                        // Check if exchanges are enabled
+                        if !self.config.enabled_exchanges.get(&long.exchange).cloned().unwrap_or(true) ||
+                           !self.config.enabled_exchanges.get(&short.exchange).cloned().unwrap_or(true) {
+                            return;
+                        }
+
                         // Prepare Risk Data
                         let target_volume = Decimal::from(1000); // 1000 USDT target
                         
@@ -227,7 +264,7 @@ impl Aggregator {
         // We use ClearType::All to ensure we wipe the slate clean every frame.
         let _ = execute!(stdout, Hide, Clear(ClearType::All), MoveTo(0, 0));
 
-        println!("=== ARBITRAGE MATRIX (Threshold: 5.0%+) ===");
+        println!("=== ARBITRAGE MATRIX (Threshold: {:.1}%+) ===", self.config.min_spread_threshold);
         println!("Last Update: {}", chrono::Local::now().format("%H:%M:%S"));
 
         // 2. Plot Equity Summary
@@ -401,6 +438,10 @@ impl Aggregator {
     async fn broadcast_state(&self) {
         let state = self.account_state.lock().unwrap().clone();
         self.broadcast_message("account.state", &state).await;
+    }
+
+    async fn broadcast_config(&self) {
+        self.broadcast_message("bot.config", &self.config).await;
     }
 
     async fn broadcast_message<T: serde::Serialize>(&self, routing_key: &str, payload: &T) {

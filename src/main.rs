@@ -64,7 +64,21 @@ async fn main() {
 
     // Channels
     let (tx, rx) = mpsc::channel::<UnifiedTicker>(1000);
+    let (cmd_tx, cmd_rx) = mpsc::channel::<crate::model::BotCommand>(10);
     let (exec_tx, exec_rx) = mpsc::channel(100);
+
+    // Setup Command Consumer
+    let messaging_cmd = messaging.clone();
+    tokio::spawn(async move {
+        let m = messaging_cmd.lock().await;
+        if let Some(client) = m.as_ref() {
+            if let Err(e) = client.setup_command_consumer("bot_commands", "bot.commands", cmd_tx).await {
+                log::error!("Failed to setup command consumer: {}", e);
+            } else {
+                log::info!("Command consumer started on queue 'bot_commands'");
+            }
+        }
+    });
 
     // Run Exchange Launchers
     exchange::launch_all(tx).await;
@@ -77,6 +91,6 @@ async fn main() {
 
     // Run Aggregator (Main Thread)
     let account_state = poller_handle.account_state.clone();
-    let mut aggregator = Aggregator::new(rx, exec_tx, log_buffer, risk_manager, rebalance_advisor, funding_rates, market_filters, account_state, notifier, messaging);
+    let mut aggregator = Aggregator::new(rx, cmd_rx, exec_tx, log_buffer, risk_manager, rebalance_advisor, funding_rates, market_filters, account_state, notifier, messaging, config);
     aggregator.run().await;
 }
