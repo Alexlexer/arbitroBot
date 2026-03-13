@@ -121,9 +121,9 @@ const calculateSpread = (exchanges, botConfig) => {
     const longPrice = parseFloat(bestLong.asks[0][0]);
     const shortPrice = parseFloat(bestShort.bids[0][0]);
     
-    // Safety Guard: If prices differ by more than 10%, it's likely a unit/data error
+    // Safety Guard: Relaxed to 11x (1000%) to allow 30%+ spreads
     const ratio = shortPrice > longPrice ? shortPrice / longPrice : longPrice / shortPrice;
-    if (ratio > 1.1) return { bestLong: null, bestShort: null, spread: 0 };
+    if (ratio > 11.0) return { bestLong: null, bestShort: null, spread: 0 };
 
     const spread = ((shortPrice - longPrice) / longPrice) * 100;
     
