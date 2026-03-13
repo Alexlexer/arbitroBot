@@ -44,7 +44,7 @@ function App() {
       <main className="max-w-7xl mx-auto px-6 mt-8 grid grid-cols-1 lg:grid-cols-12 gap-8 relative z-10 overflow-auto h-[calc(100vh-140px)] pb-20 scrollbar-hide">
         {/* Left Column: Account Summary & Config */}
         <aside className="lg:col-span-4 flex flex-col gap-8">
-          <AccountSummary state={accountState} isConnected={isConnected} />
+          <AccountSummary state={accountState} isConnected={isConnected} tickers={tickers} botConfig={botConfig} />
           <BotConfig config={botConfig} onCommand={sendBotCommand} />
         </aside>
 
