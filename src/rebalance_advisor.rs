@@ -2,6 +2,15 @@ use crate::model::{GlobalAccountState, ExchangeId, RebalanceAdvice};
 use crate::config::AppConfig;
 use rust_decimal::Decimal;
 
+/// Min transfer amount (USDT) - below this, network fee (~$2) makes transfer uneconomical
+fn min_transfer_after_fee_usdt() -> Decimal {
+    Decimal::from(25)
+}
+/// Min surplus for concentration rebalance - higher threshold since it's advisory
+fn min_concentration_transfer_usdt() -> Decimal {
+    Decimal::from(100)
+}
+
 pub struct RebalanceAdvisor {
     margin_threshold_low: Decimal,
     margin_threshold_high: Decimal,
@@ -73,7 +82,7 @@ impl RebalanceAdvisor {
                 let donor_available = d_state.available_balance;
                 if donor_available > Decimal::from(50) {
                     let transfer = r_amount.min(donor_available - Decimal::from(50)); // Leave some buffer
-                    if transfer > Decimal::from(10) {
+                    if transfer >= min_transfer_after_fee_usdt() {
                         let urgency = if r_ratio > self.margin_threshold_high { "URGENT" } else { "Advisory" };
                         advices.push(RebalanceAdvice {
                             from_exchange: **d_eid,
@@ -92,7 +101,7 @@ impl RebalanceAdvisor {
             let concentration = ex_state.total_equity / state.total_equity_usdt;
             if concentration > self.concentration_threshold {
                 let surplus = ex_state.total_equity - (state.total_equity_usdt * self.concentration_threshold);
-                if surplus > Decimal::from(100) {
+                if surplus >= min_concentration_transfer_usdt() {
                     advices.push(RebalanceAdvice {
                         from_exchange: *eid,
                         to_exchange: ExchangeId::Binance, // Default safety net

@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 use std::str::FromStr;
 use tokio::sync::mpsc::Sender;
+use tokio::time::Duration;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use url::Url;
 
@@ -24,12 +25,15 @@ impl Exchange for BinanceLauncher {
         // For simpler architecture, we'll spawn the connection loop here.
         
         tokio::spawn(async move {
-            let url = Url::parse("wss://fstream.binance.com/ws/!bookTicker").unwrap();
+            let url = Url::parse("wss://fstream.binance.com/ws/!bookTicker")
+                .expect("Invalid Binance WebSocket URL");
+            let mut reconnect_attempt: u32 = 0;
             
             loop {
                 info!("Connecting to Binance Futures...");
                 match connect_async(url.clone()).await {
                     Ok((ws_stream, _)) => {
+                        reconnect_attempt = 0; // Reset on success
                         info!("Connected to Binance Futures.");
                         let (_, mut read) = ws_stream.split();
 
@@ -60,9 +64,11 @@ impl Exchange for BinanceLauncher {
                     }
                     Err(e) => {
                         error!("Binance connection error: {}", e);
+                        reconnect_attempt += 1;
                     }
                 }
-                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                let delay = super::reconnect_delay_secs(reconnect_attempt);
+                tokio::time::sleep(Duration::from_secs(delay)).await;
             }
         });
 

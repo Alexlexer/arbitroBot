@@ -28,7 +28,11 @@ impl TelegramNotifier {
     pub fn new(account_state: Arc<Mutex<crate::model::GlobalAccountState>>) -> Self {
         let token = env::var("TELEGRAM_BOT_TOKEN").unwrap_or_default();
         let chat_id = env::var("TELEGRAM_CHAT_ID").unwrap_or_default();
-        let password = env::var("BOT_PASSWORD").unwrap_or_else(|_| "admin123".to_string());
+        // Require explicit password when Telegram is enabled; no insecure default
+        let password = env::var("BOT_PASSWORD").unwrap_or_default();
+        if !token.is_empty() && password.is_empty() {
+            info!("BOT_PASSWORD not set - /login will be disabled until you set it in .env");
+        }
         let enabled = !token.is_empty();
 
         if token.is_empty() {
@@ -209,6 +213,10 @@ impl TelegramNotifier {
         }
 
         if text.starts_with("/login") {
+            if self.password.is_empty() {
+                self.send_to_chat(chat_id, "❌ *Login disabled.* Set BOT_PASSWORD in .env first.").await;
+                return;
+            }
             let parts: Vec<&str> = text.split_whitespace().collect();
             
             if parts.len() > 1 {

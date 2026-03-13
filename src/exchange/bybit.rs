@@ -22,7 +22,9 @@ impl Exchange for BybitLauncher {
         let tx_clone = tx.clone();
         
         tokio::spawn(async move {
-            let url = Url::parse("wss://stream.bybit.com/v5/public/linear").unwrap();
+            let url = Url::parse("wss://stream.bybit.com/v5/public/linear")
+                .expect("Invalid Bybit WebSocket URL");
+            let mut reconnect_attempt: u32 = 0;
             // Dynamic Fetch
             info!("Fetching active trading pairs from Bybit API...");
             
@@ -81,6 +83,7 @@ impl Exchange for BybitLauncher {
                 info!("Connecting to Bybit Linear...");
                 match connect_async(url.clone()).await {
                     Ok((ws_stream, _)) => {
+                        reconnect_attempt = 0;
                         info!("Connected to Bybit.");
                         let (mut write, mut read) = ws_stream.split();
 
@@ -149,9 +152,11 @@ impl Exchange for BybitLauncher {
                     }
                     Err(e) => {
                         error!("Bybit connection error: {}", e);
+                        reconnect_attempt += 1;
                     }
                 }
-                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                let delay = super::reconnect_delay_secs(reconnect_attempt);
+                tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
             }
         });
 

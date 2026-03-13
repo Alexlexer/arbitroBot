@@ -22,7 +22,9 @@ impl Exchange for BitgetLauncher {
         let tx_clone = tx.clone();
 
         tokio::spawn(async move {
-            let url = Url::parse("wss://ws.bitget.com/v2/ws/public").unwrap();
+            let url = Url::parse("wss://ws.bitget.com/v2/ws/public")
+                .expect("Invalid Bitget WebSocket URL");
+            let mut reconnect_attempt: u32 = 0;
             // Dynamic Fetch
             info!("Fetching active trading pairs from Bitget API...");
             let client = reqwest::Client::new();
@@ -60,6 +62,7 @@ impl Exchange for BitgetLauncher {
                 info!("Connecting to Bitget...");
                 match connect_async(url.clone()).await {
                     Ok((ws_stream, _)) => {
+                        reconnect_attempt = 0;
                         info!("Connected to Bitget.");
                         let (mut write, mut read) = ws_stream.split();
 
@@ -133,9 +136,11 @@ impl Exchange for BitgetLauncher {
                     }
                     Err(e) => {
                         error!("Bitget connection error: {}", e);
+                        reconnect_attempt += 1;
                     }
                 }
-                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                let delay = super::reconnect_delay_secs(reconnect_attempt);
+                tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
             }
         });
         Ok(())

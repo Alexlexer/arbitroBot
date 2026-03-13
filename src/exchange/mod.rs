@@ -11,6 +11,11 @@ pub mod kraken;
 pub mod ourbit;
 pub mod gate;
 
+/// Exponential backoff delay for WebSocket reconnection (secs). Caps at 120s.
+pub fn reconnect_delay_secs(attempt: u32) -> u64 {
+    (2u64.pow(attempt.min(6))).min(120)
+}
+
 #[async_trait]
 pub trait Exchange: Send + Sync {
     async fn connect(&mut self, tx: Sender<UnifiedTicker>) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;

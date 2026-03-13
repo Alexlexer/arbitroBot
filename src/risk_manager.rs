@@ -1,3 +1,4 @@
+use crate::constants::RISK_MAX_TICKER_LAG_MS;
 use crate::model::{
     ExchangeId, ArbitrageOpportunity, OrderBookDepth, FundingInfo, AssetStatus, RiskError
 };
@@ -11,6 +12,64 @@ pub struct RiskManager {
 impl RiskManager {
     pub fn new() -> Self {
         Self {}
+    }
+
+    /// Max USDT volume that can be traded without exceeding max_slippage_pct (e.g. 0.001 = 0.1%).
+    /// Walks the order book until VWAP exceeds best ± slippage; returns min of long (asks) and short (bids) side.
+    pub fn max_safe_volume_usdt(
+        &self,
+        opp: &ArbitrageOpportunity,
+        depth_map: &HashMap<ExchangeId, OrderBookDepth>,
+        max_slippage_pct: Decimal,
+    ) -> Option<Decimal> {
+        let long_depth = depth_map.get(&opp.long_exchange)?;
+        let short_depth = depth_map.get(&opp.short_exchange)?;
+        if long_depth.asks.is_empty() || short_depth.bids.is_empty() {
+            return None;
+        }
+        let best_ask = long_depth.asks[0].0;
+        let best_bid = short_depth.bids[0].0;
+        if best_ask.is_zero() || best_bid.is_zero() {
+            return None;
+        }
+
+        // Long side: buy on asks; stop when VWAP > best_ask * (1 + slippage)
+        let mut cum_notional = Decimal::ZERO;
+        let mut cum_size = Decimal::ZERO;
+        for (p, s) in &long_depth.asks {
+            let new_notional = cum_notional + p * s;
+            let new_size = cum_size + s;
+            if new_size.is_zero() {
+                continue;
+            }
+            let vwap = new_notional / new_size;
+            if vwap > best_ask * (Decimal::ONE + max_slippage_pct) {
+                break;
+            }
+            cum_notional = new_notional;
+            cum_size = new_size;
+        }
+        let long_safe = cum_notional;
+
+        // Short side: sell on bids; stop when VWAP < best_bid * (1 - slippage)
+        cum_notional = Decimal::ZERO;
+        cum_size = Decimal::ZERO;
+        for (p, s) in &short_depth.bids {
+            let new_notional = cum_notional + p * s;
+            let new_size = cum_size + s;
+            if new_size.is_zero() {
+                continue;
+            }
+            let vwap = new_notional / new_size;
+            if vwap < best_bid * (Decimal::ONE - max_slippage_pct) {
+                break;
+            }
+            cum_notional = new_notional;
+            cum_size = new_size;
+        }
+        let short_safe = cum_notional;
+
+        Some(long_safe.min(short_safe))
     }
 
     /// Primary validation entry point
@@ -33,7 +92,7 @@ impl RiskManager {
         self.check_margin_ratio(opp, account_state)?;
 
         // 3. Check Timestamp Drift (Stale Data Guard)
-        self.check_timestamp_drift(ticker_timestamps, 500)?;
+        self.check_timestamp_drift(ticker_timestamps, RISK_MAX_TICKER_LAG_MS)?;
 
         // 4. Check Trading Status
         self.check_trading_status(opp, market_filters)?;
@@ -115,7 +174,7 @@ impl RiskManager {
         Ok(())
     }
 
-    /// Funding Rate Threshold: Block if predicted 24h loss > 50% of spread
+    /// Funding rate check: rate_pct is "% per 8h" (exchange standard). Require hours_to_breakeven >= 72h.
     fn check_funding(
         &self,
         opp: &ArbitrageOpportunity,
@@ -125,6 +184,7 @@ impl RiskManager {
         let funding_long = funding_map.get(&opp.long_exchange).map(|f| f.rate_pct).unwrap_or(zero);
         let funding_short = funding_map.get(&opp.short_exchange).map(|f| f.rate_pct).unwrap_or(zero);
 
+        // Net funding cost per 8h interval (in %)
         let net_funding_per_8h = (funding_long - funding_short).abs();
 
         if net_funding_per_8h > Decimal::ZERO {

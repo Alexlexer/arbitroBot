@@ -1,3 +1,7 @@
+use crate::constants::{
+    TICKER_STALE_MS, OPPORTUNITY_ALERT_COOLDOWN_MS,
+    target_volume_usdt, transfer_fee_usdt, max_slippage_for_safe_volume,
+};
 use crate::model::{ExchangeId, UnifiedTicker, ArbitrageOpportunity, FundingInfo, AssetStatus};
 use crate::risk_manager::RiskManager;
 use crate::notifier::TelegramNotifier;
@@ -19,11 +23,14 @@ pub struct Aggregator {
     account_state: Arc<Mutex<crate::model::GlobalAccountState>>,
     rebalance_advisor: crate::rebalance_advisor::RebalanceAdvisor,
     last_rebalance_advice: Arc<Mutex<Vec<crate::model::RebalanceAdvice>>>,
+    last_rebalance_notified: Arc<Mutex<Option<Vec<crate::model::RebalanceAdvice>>>>,
+    /// (symbol, long_ex, short_ex) -> last_alert_ts_ms (cooldown to avoid spam)
+    last_opportunity_alert: Arc<Mutex<HashMap<String, i64>>>,
     notifier: Arc<TelegramNotifier>,
     messaging: crate::messaging::SharedMessaging,
     // Symbol -> Exchange -> Ticker
     market_data: HashMap<String, HashMap<ExchangeId, UnifiedTicker>>,
-    config: crate::config::AppConfig,
+    config: Arc<Mutex<crate::config::AppConfig>>,
 }
 
 impl Aggregator {
@@ -39,7 +46,7 @@ impl Aggregator {
         account_state: Arc<Mutex<crate::model::GlobalAccountState>>,
         notifier: Arc<TelegramNotifier>,
         messaging: crate::messaging::SharedMessaging,
-        config: crate::config::AppConfig,
+        config: Arc<Mutex<crate::config::AppConfig>>,
     ) -> Self {
         Self {
             rx,
@@ -52,6 +59,8 @@ impl Aggregator {
             account_state,
             rebalance_advisor,
             last_rebalance_advice: Arc::new(Mutex::new(Vec::new())),
+            last_rebalance_notified: Arc::new(Mutex::new(None)),
+            last_opportunity_alert: Arc::new(Mutex::new(HashMap::new())),
             notifier,
             messaging,
             market_data: HashMap::new(),
@@ -61,7 +70,8 @@ impl Aggregator {
 
     pub fn update_config(&mut self, config: crate::config::AppConfig) {
         info!("Updating Aggregator config: Spread Threshold set to {:.2}%", config.min_spread_threshold);
-        self.config = config;
+        let mut c = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        *c = config;
     }
 
     pub async fn run(&mut self) {
@@ -90,17 +100,24 @@ impl Aggregator {
 
     async fn handle_command(&mut self, cmd: crate::model::BotCommand) {
         use crate::model::BotCommand;
-        match cmd {
-            BotCommand::UpdateSpread { threshold } => {
-                self.config.min_spread_threshold = threshold;
-                info!("COMMAND: Spread threshold updated to {:.2}%", threshold);
+        {
+            let mut c = self.config.lock().unwrap_or_else(|e| e.into_inner());
+            match cmd {
+                BotCommand::UpdateSpread { threshold } => {
+                    c.min_spread_threshold = threshold;
+                    info!("COMMAND: Spread threshold updated to {:.2}%", threshold);
+                }
+                BotCommand::ToggleExchange { exchange, enabled } => {
+                    c.enabled_exchanges.insert(exchange, enabled);
+                    info!("COMMAND: Exchange {} toggled to {}", exchange, enabled);
+                }
+                BotCommand::UpdateApiKeys { exchange, credentials } => {
+                    c.api_keys.insert(exchange, credentials);
+                    info!("COMMAND: API Keys updated for {}", exchange);
+                }
             }
-            BotCommand::ToggleExchange { exchange, enabled } => {
-                self.config.enabled_exchanges.insert(exchange, enabled);
-                info!("COMMAND: Exchange {} toggled to {}", exchange, enabled);
-            }
+            let _ = c.save();
         }
-        let _ = self.config.save();
         self.broadcast_config().await;
     }
 
@@ -139,9 +156,9 @@ impl Aggregator {
                         return; 
                     }
 
-                    // Freshness Check: ignore if data is older than 15s
+                    // Freshness Check: ignore if data is older than threshold
                     let now = chrono::Utc::now().timestamp_millis();
-                    if now - long.timestamp > 15000 || now - short.timestamp > 15000 {
+                    if now - long.timestamp > TICKER_STALE_MS || now - short.timestamp > TICKER_STALE_MS {
                         info!("REJECT {}: Stale data (L: {}ms, S: {}ms ago)", symbol, now - long.timestamp, now - short.timestamp);
                         return;
                     }
@@ -156,28 +173,52 @@ impl Aggregator {
                     let net_spread = gross_spread - total_cost_pct;
 
                     // Use config threshold
-                    let threshold = self.config.min_spread_threshold;
+                    let (threshold, is_long_enabled, is_short_enabled) = {
+                        let c = self.config.lock().unwrap_or_else(|e| e.into_inner());
+                        (
+                            c.min_spread_threshold,
+                            c.enabled_exchanges.get(&long.exchange).cloned().unwrap_or(true),
+                            c.enabled_exchanges.get(&short.exchange).cloned().unwrap_or(true)
+                        )
+                    };
                     let max_sanity = Decimal::from(100); // 100% max
                     
                     if net_spread >= threshold && net_spread < max_sanity {
                         // Check if exchanges are enabled
-                        if !self.config.enabled_exchanges.get(&long.exchange).cloned().unwrap_or(true) ||
-                           !self.config.enabled_exchanges.get(&short.exchange).cloned().unwrap_or(true) {
+                        if !is_long_enabled || !is_short_enabled {
                             return;
                         }
 
-                        // Prepare Risk Data
-                        let target_volume = Decimal::from(1000); // 1000 USDT target
-                        
-                        // Rebalancing Transfer Costs: must make at least $2 net profit after spread
-                        let expected_profit_usdt = target_volume * (net_spread / Decimal::from(100));
-                        if expected_profit_usdt <= Decimal::from(2) { return; }
-                        
                         let mut depth_map = HashMap::new();
                         depth_map.insert(long.exchange, crate::model::OrderBookDepth { bids: long.bids.clone(), asks: long.asks.clone() });
                         depth_map.insert(short.exchange, crate::model::OrderBookDepth { bids: short.bids.clone(), asks: short.asks.clone() });
 
-                        let r_rates = self.funding_rates.lock().unwrap();
+                        let opp_for_risk = ArbitrageOpportunity {
+                            symbol: symbol.to_string(),
+                            long_exchange: long.exchange,
+                            short_exchange: short.exchange,
+                            long_price: b_long.0,
+                            short_price: b_short.0,
+                            spread_pct: net_spread,
+                            _timestamp: chrono::Utc::now().timestamp_millis(),
+                        };
+
+                        // Dynamic position size: cap by order book depth (slippage budget)
+                        let default_volume = target_volume_usdt();
+                        let safe_volume = self.risk_manager.max_safe_volume_usdt(
+                            &opp_for_risk,
+                            &depth_map,
+                            max_slippage_for_safe_volume(),
+                        ).unwrap_or(default_volume);
+                        let target_volume = safe_volume.min(default_volume);
+
+                        // Require expected profit (after spread) to exceed transfer/fee buffer
+                        let expected_profit_usdt = target_volume * (net_spread / Decimal::from(100));
+                        if expected_profit_usdt <= transfer_fee_usdt() {
+                            return;
+                        }
+
+                        let r_rates = self.funding_rates.lock().unwrap_or_else(|e| e.into_inner());
                         let mut funding_map = HashMap::new();
                         if let Some(exchange_rates) = r_rates.get(&long.exchange) {
                             if let Some(info) = exchange_rates.get(symbol) {
@@ -195,58 +236,52 @@ impl Aggregator {
                         status_map.insert(long.exchange, AssetStatus { can_deposit: true, can_withdraw: true, is_active: true });
                         status_map.insert(short.exchange, AssetStatus { can_deposit: true, can_withdraw: true, is_active: true });
 
-                        let r_filters = self.market_filters.lock().unwrap();
+                        let r_filters = self.market_filters.lock().unwrap_or_else(|e| e.into_inner());
                         
                         let mut ticker_timestamps = HashMap::new();
                         ticker_timestamps.insert(long.exchange, long.timestamp);
                         ticker_timestamps.insert(short.exchange, short.timestamp);
 
-                        let account_state = self.account_state.lock().unwrap();
+                        let account_state = self.account_state.lock().unwrap_or_else(|e| e.into_inner());
 
                         // Validate Risk
-                        let risk_result = self.risk_manager.validate(&ArbitrageOpportunity {
-                            symbol: symbol.to_string(),
-                            long_exchange: long.exchange,
-                            short_exchange: short.exchange,
-                            long_price: b_long.0,
-                            short_price: b_short.0,
-                            spread_pct: net_spread,
-                            _timestamp: chrono::Utc::now().timestamp_millis(),
-                        }, &depth_map, &funding_map, &status_map, &r_filters, &ticker_timestamps, &account_state, target_volume).await;
+                        let risk_result = self.risk_manager.validate(&opp_for_risk, &depth_map, &funding_map, &status_map, &r_filters, &ticker_timestamps, &account_state, target_volume).await;
 
-                        let status_text = match &risk_result {
-                            Ok(_) => "✅ *ACTIONABLE*",
-                            Err(e) => &format!("⚠️ *RISK BLOCKED*\n_Reason: {}_", e),
+                        // Cooldown: don't spam the same symbol+pair (e.g. 1 alert per minute per opportunity)
+                        let alert_key = format!("{}_{:?}_{:?}", symbol, long.exchange, short.exchange);
+                        let should_send = {
+                            let mut last = self.last_opportunity_alert.lock().unwrap_or_else(|e| e.into_inner());
+                            let last_ts = last.get(&alert_key).copied().unwrap_or(0);
+                            if now - last_ts >= OPPORTUNITY_ALERT_COOLDOWN_MS {
+                                last.insert(alert_key.clone(), now);
+                                true
+                            } else {
+                                false
+                            }
                         };
 
-                        // Send Telegram Alert (Immediate)
-                        let alert_msg = format!(
-                            "{} \n\n\
-                            *Symbol*: {}\n\
-                            *Long*: {} @ {:.4}\n\
-                            *Short*: {} @ {:.4}\n\
-                            *Net Spread*: {:.2}%\n\
-                            *Threshold*: {:.1}%",
-                            status_text, symbol, long.exchange, b_long.0, short.exchange, b_short.0, net_spread, threshold
-                        );
-                        
-                        let n = self.notifier.clone();
-                        tokio::spawn(async move {
-                            n.send_alert(&alert_msg).await;
-                        });
+                        if should_send {
+                            let status_text: String = match &risk_result {
+                                Ok(_) => "✅ *ACTIONABLE*".into(),
+                                Err(e) => format!("⚠️ *RISK BLOCKED*\n_Reason: {}_", e),
+                            };
+                            let alert_msg = format!(
+                                "{} \n\n\
+                                *Symbol*: {}\n\
+                                *Long*: {} @ {:.4}\n\
+                                *Short*: {} @ {:.4}\n\
+                                *Net Spread*: {:.2}%\n\
+                                *Threshold*: {:.1}%",
+                                &status_text, symbol, long.exchange, b_long.0, short.exchange, b_short.0, net_spread, threshold
+                            );
+                            let n = self.notifier.clone();
+                            tokio::spawn(async move {
+                                n.send_alert(&alert_msg).await;
+                            });
+                        }
 
                         if let Ok(_) = risk_result {
-                            let opp = ArbitrageOpportunity {
-                                symbol: symbol.to_string(),
-                                long_exchange: long.exchange,
-                                short_exchange: short.exchange,
-                                long_price: b_long.0,
-                                short_price: b_short.0,
-                                spread_pct: net_spread,
-                                _timestamp: chrono::Utc::now().timestamp_millis(),
-                            };
-
-                            if let Err(e) = self.exec_tx.send(opp).await {
+                            if let Err(e) = self.exec_tx.send(opp_for_risk.clone()).await {
                                 error!("Failed to send opportunity to ExecutionActor: {}", e);
                             }
                         } else if let Err(e) = risk_result {
@@ -269,7 +304,8 @@ impl Aggregator {
         // We use ClearType::All to ensure we wipe the slate clean every frame.
         let _ = execute!(stdout, Hide, Clear(ClearType::All), MoveTo(0, 0));
 
-        println!("=== ARBITRAGE MATRIX (Threshold: {:.1}%+) ===", self.config.min_spread_threshold);
+        let threshold = self.config.lock().unwrap_or_else(|e| e.into_inner()).min_spread_threshold;
+        println!("=== ARBITRAGE MATRIX (Threshold: {:.1}%+) ===", threshold);
         println!("Last Update: {}", chrono::Local::now().format("%H:%M:%S"));
 
         // 2. Plot Equity Summary
@@ -293,7 +329,7 @@ impl Aggregator {
 
             // Trading Status Check
             {
-                let filters = self.market_filters.lock().unwrap();
+                let filters = self.market_filters.lock().unwrap_or_else(|e| e.into_inner());
                 let mut all_tradable = true;
                 for (eid, _) in exchanges {
                     if let Some(ef) = filters.get(eid) {
@@ -328,7 +364,7 @@ impl Aggregator {
 
                     // Freshness check for Matrix TUI
                     let now = chrono::Utc::now().timestamp_millis();
-                    if now - long.timestamp > 15000 || now - short.timestamp > 15000 { continue; }
+                    if now - long.timestamp > TICKER_STALE_MS || now - short.timestamp > TICKER_STALE_MS { continue; }
 
                     let gross_spread = (b_short.0 - b_long.0) / b_long.0 * Decimal::from(100);
                     
@@ -409,7 +445,7 @@ impl Aggregator {
 
     async fn check_rebalancing(&self) {
         let state = {
-            let s = self.account_state.lock().unwrap();
+            let s = self.account_state.lock().unwrap_or_else(|e| e.into_inner());
             s.clone()
         };
 
@@ -417,36 +453,43 @@ impl Aggregator {
         
         // Store for TUI
         {
-            let mut last = self.last_rebalance_advice.lock().unwrap();
+            let mut last = self.last_rebalance_advice.lock().unwrap_or_else(|e| e.into_inner());
             *last = advices.clone();
         }
 
-        for advice in advices {
-            let msg = format!(
-                "⚖️ *Rebalance Suggestion*\n\n\
-                *Reason*: {}\n\
-                *Action*: Move `${:.0} USDT` from **{}** to **{}**",
-                advice.reason, advice.amount_usdt, advice.from_exchange, advice.to_exchange
-            );
-            
-            // Log locally
-            info!("REBALANCE: {}", advice.reason);
-            
-            // Notify Telegram
-            let n = self.notifier.clone();
-            tokio::spawn(async move {
-                n.send_alert(&msg).await;
-            });
+        // Debounce: only send Telegram when advice changed (avoids spam every 2s)
+        let should_notify = {
+            let last_sent = self.last_rebalance_notified.lock().unwrap_or_else(|e| e.into_inner());
+            last_sent.as_ref() != Some(&advices)
+        };
+        if should_notify && !advices.is_empty() {
+            if let Ok(mut last) = self.last_rebalance_notified.lock() {
+                *last = Some(advices.clone());
+            }
+            for advice in &advices {
+                let msg = format!(
+                    "⚖️ *Rebalance Suggestion*\n\n\
+                    *Reason*: {}\n\
+                    *Action*: Move `${:.0} USDT` from **{}** to **{}**",
+                    advice.reason, advice.amount_usdt, advice.from_exchange, advice.to_exchange
+                );
+                info!("REBALANCE: {}", advice.reason);
+                let n = self.notifier.clone();
+                tokio::spawn(async move {
+                    n.send_alert(&msg).await;
+                });
+            }
         }
     }
 
     async fn broadcast_state(&self) {
-        let state = self.account_state.lock().unwrap().clone();
+        let state = self.account_state.lock().unwrap_or_else(|e| e.into_inner()).clone();
         self.broadcast_message("account.state", &state).await;
     }
 
     async fn broadcast_config(&self) {
-        self.broadcast_message("bot.config", &self.config).await;
+        let config_snapshot = { self.config.lock().unwrap_or_else(|e| e.into_inner()).clone() };
+        self.broadcast_message("bot.config", &config_snapshot).await;
     }
 
     async fn broadcast_message<T: serde::Serialize>(&self, routing_key: &str, payload: &T) {

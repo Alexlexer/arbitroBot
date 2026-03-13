@@ -144,7 +144,7 @@ pub struct ArbitrageOpportunity {
     pub _timestamp: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RebalanceAdvice {
     pub from_exchange: ExchangeId,
     pub to_exchange: ExchangeId,
@@ -153,10 +153,18 @@ pub struct RebalanceAdvice {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiCredentials {
+    pub key: String,
+    pub secret: String,
+    pub passphrase: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BotCommand {
     UpdateSpread { threshold: Decimal },
     ToggleExchange { exchange: ExchangeId, enabled: bool },
+    UpdateApiKeys { exchange: ExchangeId, credentials: ApiCredentials },
 }
 
 pub fn normalize_symbol(s: &str) -> String {

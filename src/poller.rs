@@ -13,10 +13,11 @@ pub struct DataPoller {
     pub account_state: Arc<Mutex<crate::model::GlobalAccountState>>,
     pub asset_statuses: Arc<Mutex<HashMap<ExchangeId, HashMap<String, crate::model::AssetStatus>>>>,
     rate_limiter: Arc<RateLimiter>,
+    config: Arc<Mutex<crate::config::AppConfig>>,
 }
 
 impl DataPoller {
-    pub fn new(rate_limiter: Arc<RateLimiter>) -> Self {
+    pub fn new(rate_limiter: Arc<RateLimiter>, config: Arc<Mutex<crate::config::AppConfig>>) -> Self {
         Self {
             funding_rates: Arc::new(Mutex::new(HashMap::new())),
             market_filters: Arc::new(Mutex::new(HashMap::new())),
@@ -28,6 +29,7 @@ impl DataPoller {
             })),
             asset_statuses: Arc::new(Mutex::new(HashMap::new())),
             rate_limiter,
+            config,
         }
     }
 
@@ -246,8 +248,18 @@ impl DataPoller {
         if let Ok(st) = self.fetch_mexc_asset_status(client).await { asset_statuses.insert(ExchangeId::MEXC, st); }
         if let Ok(st) = self.fetch_okx_asset_status(client).await { asset_statuses.insert(ExchangeId::Okx, st); }
 
+        let credentials = { self.config.lock().unwrap().api_keys.clone() };
+
         // 1. Binance
-        if let (Ok(key), Ok(secret)) = (env::var("BINANCE_API_KEY"), env::var("BINANCE_API_SECRET")) {
+        let binance_keys = credentials.get(&ExchangeId::Binance)
+            .map(|c| (c.key.clone(), c.secret.clone()))
+            .or_else(|| {
+                if let (Ok(key), Ok(secret)) = (env::var("BINANCE_API_KEY"), env::var("BINANCE_API_SECRET")) {
+                    Some((key, secret))
+                } else { None }
+            });
+
+        if let Some((key, secret)) = binance_keys {
             if let Ok(state) = self.fetch_binance_account(client, &key, &secret).await {
                 total_equity += state.total_equity;
                 total_pnl += state.positions.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
@@ -256,7 +268,15 @@ impl DataPoller {
         }
 
         // 2. Bybit
-        if let (Ok(key), Ok(secret)) = (env::var("BYBIT_API_KEY"), env::var("BYBIT_API_SECRET")) {
+        let bybit_keys = credentials.get(&ExchangeId::Bybit)
+            .map(|c| (c.key.clone(), c.secret.clone()))
+            .or_else(|| {
+                if let (Ok(key), Ok(secret)) = (env::var("BYBIT_API_KEY"), env::var("BYBIT_API_SECRET")) {
+                    Some((key, secret))
+                } else { None }
+            });
+
+        if let Some((key, secret)) = bybit_keys {
             if let Ok(state) = self.fetch_bybit_account(client, &key, &secret).await {
                 total_equity += state.total_equity;
                 total_pnl += state.positions.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
@@ -265,8 +285,17 @@ impl DataPoller {
         }
 
         // 3. Bitget
-        if let (Ok(key), Ok(secret)) = (env::var("BITGET_API_KEY"), env::var("BITGET_API_SECRET")) {
-            if let Ok(state) = self.fetch_bitget_account(client, &key, &secret).await {
+        let bitget_keys = credentials.get(&ExchangeId::Bitget)
+            .map(|c| (c.key.clone(), c.secret.clone(), c.passphrase.clone().unwrap_or_default()))
+            .or_else(|| {
+                if let (Ok(key), Ok(secret)) = (env::var("BITGET_API_KEY"), env::var("BITGET_API_SECRET")) {
+                    Some((key, secret, env::var("BITGET_API_PASSPHRASE").unwrap_or_default()))
+                } else { None }
+            });
+
+        if let Some((key, secret, pphrase)) = bitget_keys {
+            // Bitget needs passphrase in fetch_bitget_account (it reads from env, let's fix that)
+            if let Ok(state) = self.fetch_bitget_account_v2(client, &key, &secret, &pphrase).await {
                 total_equity += state.total_equity;
                 total_pnl += state.positions.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
                 exchange_states.insert(ExchangeId::Bitget, state);
@@ -274,7 +303,15 @@ impl DataPoller {
         }
 
         // 4. MEXC
-        if let (Ok(key), Ok(secret)) = (env::var("MEXC_API_KEY"), env::var("MEXC_API_SECRET")) {
+        let mexc_keys = credentials.get(&ExchangeId::MEXC)
+            .map(|c| (c.key.clone(), c.secret.clone()))
+            .or_else(|| {
+                if let (Ok(key), Ok(secret)) = (env::var("MEXC_API_KEY"), env::var("MEXC_API_SECRET")) {
+                    Some((key, secret))
+                } else { None }
+            });
+
+        if let Some((key, secret)) = mexc_keys {
             if let Ok(state) = self.fetch_mexc_account(client, &key, &secret).await {
                 total_equity += state.total_equity;
                 total_pnl += state.positions.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
@@ -283,8 +320,16 @@ impl DataPoller {
         }
 
         // 5. OKX
-        if let (Ok(key), Ok(secret), Ok(passphrase)) = (env::var("OKX_API_KEY"), env::var("OKX_API_SECRET"), env::var("OKX_API_PASSPHRASE")) {
-            if let Ok(state) = self.fetch_okx_account(client, &key, &secret, &passphrase).await {
+        let okx_keys = credentials.get(&ExchangeId::Okx)
+            .map(|c| (c.key.clone(), c.secret.clone(), c.passphrase.clone().unwrap_or_default()))
+            .or_else(|| {
+                if let (Ok(key), Ok(secret)) = (env::var("OKX_API_KEY"), env::var("OKX_API_SECRET")) {
+                    Some((key, secret, env::var("OKX_API_PASSPHRASE").unwrap_or_default()))
+                } else { None }
+            });
+
+        if let Some((key, secret, pphrase)) = okx_keys {
+            if let Ok(state) = self.fetch_okx_account(client, &key, &secret, &pphrase).await {
                 total_equity += state.total_equity;
                 total_pnl += state.positions.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
                 exchange_states.insert(ExchangeId::Okx, state);
@@ -403,6 +448,76 @@ impl DataPoller {
                         size: size.abs(),
                         entry_price: Decimal::from_str(p["avgPrice"].as_str().unwrap_or("0"))?,
                         unrealized_pnl: Decimal::from_str(p["unrealisedPnl"].as_str().unwrap_or("0"))?,
+                    });
+                }
+            }
+        }
+        Ok(positions)
+    }
+
+    async fn fetch_bitget_account_v2(&self, client: &reqwest::Client, key: &str, secret: &str, passphrase: &str) -> Result<crate::model::ExchangeAccountState, Box<dyn std::error::Error>> {
+        let timestamp = chrono::Utc::now().timestamp_millis().to_string();
+        let method = "GET";
+        let request_path = "/api/v2/mix/account/accounts?productType=USDT-FUTURES";
+        let payload = format!("{}{}{}", timestamp, method, request_path);
+        let signature = self._hmac_signature(secret, &payload);
+
+        let url = format!("https://api.bitget.com{}", request_path);
+        let resp = client.get(&url)
+            .header("ACCESS-KEY", key)
+            .header("ACCESS-SIGN", signature)
+            .header("ACCESS-TIMESTAMP", &timestamp)
+            .header("ACCESS-PASSPHRASE", passphrase) 
+            .send().await?;
+
+        let json: serde_json::Value = resp.json().await?;
+        let data = &json["data"][0];
+
+        let total_equity = Decimal::from_str(data["marginBalance"].as_str().unwrap_or("0"))?;
+        let available = Decimal::from_str(data["available"].as_str().unwrap_or("0"))?;
+
+        let mut positions = Vec::new();
+        if let Ok(pos) = self.fetch_bitget_positions_v2(client, key, secret, passphrase).await {
+            positions = pos;
+        }
+
+        Ok(crate::model::ExchangeAccountState {
+            total_equity,
+            available_balance: available,
+            margin_ratio: if total_equity.is_zero() { Decimal::ZERO } else { (total_equity - available) / total_equity },
+            positions,
+        })
+    }
+
+    async fn fetch_bitget_positions_v2(&self, client: &reqwest::Client, key: &str, secret: &str, passphrase: &str) -> Result<Vec<crate::model::PositionInfo>, Box<dyn std::error::Error>> {
+        let timestamp = chrono::Utc::now().timestamp_millis().to_string();
+        let method = "GET";
+        let request_path = "/api/v2/mix/position/all-position?productType=USDT-FUTURES";
+        let payload = format!("{}{}{}", timestamp, method, request_path);
+        let signature = self._hmac_signature(secret, &payload);
+
+        let url = format!("https://api.bitget.com{}", request_path);
+        let resp = client.get(&url)
+            .header("ACCESS-KEY", key)
+            .header("ACCESS-SIGN", signature)
+            .header("ACCESS-TIMESTAMP", &timestamp)
+            .header("ACCESS-PASSPHRASE", passphrase) 
+            .send().await?;
+
+        let json: serde_json::Value = resp.json().await?;
+        let mut positions = Vec::new();
+
+        if let Some(list) = json["data"].as_array() {
+            for p in list {
+                let hold_side = p["holdSide"].as_str().unwrap_or("");
+                let size = Decimal::from_str(p["total"].as_str().unwrap_or("0"))?;
+                if !size.is_zero() {
+                    positions.push(crate::model::PositionInfo {
+                        symbol: p["symbol"].as_str().unwrap_or("").to_string(),
+                        side: if hold_side == "long" { "LONG".to_string() } else { "SHORT".to_string() },
+                        size: size.abs(),
+                        entry_price: Decimal::from_str(p["averageOpenPrice"].as_str().unwrap_or("0"))?,
+                        unrealized_pnl: Decimal::from_str(p["unrealizedPL"].as_str().unwrap_or("0"))?,
                     });
                 }
             }

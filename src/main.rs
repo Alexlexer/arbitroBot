@@ -1,3 +1,4 @@
+mod constants;
 mod model;
 mod exchange;
 mod aggregator;
@@ -16,7 +17,7 @@ use execution::ExecutionActor;
 use model::UnifiedTicker;
 use rate_limiter::RateLimiter;
 use tokio::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 #[tokio::main]
 async fn main() {
@@ -27,19 +28,19 @@ async fn main() {
     let log_capacity = 20;
     let logger = logger::BufferLogger::new(log_capacity);
     let log_buffer = logger.logs.clone(); // Clone Arc
-    logger.init().unwrap(); // Set as global logger
+    logger.init().expect("Failed to initialize logger");
 
     // Load Configuration
-    let config = config::AppConfig::load();
+    let config = Arc::new(Mutex::new(config::AppConfig::load()));
 
     // Initialize Messaging (RabbitMQ)
     let messaging = messaging::init_messaging().await;
 
     // Setup Risk, Poller, Notifier & RateLimiter
     let risk_manager = risk_manager::RiskManager::new();
-    let rebalance_advisor = rebalance_advisor::RebalanceAdvisor::new(&config);
+    let rebalance_advisor = rebalance_advisor::RebalanceAdvisor::new(&config.lock().unwrap_or_else(|e| e.into_inner()));
     let rate_limiter = Arc::new(RateLimiter::new());
-    let poller = poller::DataPoller::new(rate_limiter.clone());
+    let poller = poller::DataPoller::new(rate_limiter.clone(), config.clone());
     let funding_rates = poller.funding_rates.clone();
     let market_filters = poller.market_filters.clone();
     let account_state = poller.account_state.clone();

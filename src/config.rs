@@ -11,6 +11,7 @@ pub struct AppConfig {
     pub polling_interval_ms: u64,         // 5000
     pub min_spread_threshold: Decimal,    // 5.0 (5%)
     pub enabled_exchanges: std::collections::HashMap<crate::model::ExchangeId, bool>,
+    pub api_keys: std::collections::HashMap<crate::model::ExchangeId, crate::model::ApiCredentials>,
 }
 
 impl AppConfig {
@@ -43,6 +44,7 @@ impl AppConfig {
             polling_interval_ms: 5000,
             min_spread_threshold: Decimal::from(5),
             enabled_exchanges,
+            api_keys: std::collections::HashMap::new(),
         }
     }
 

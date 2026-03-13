@@ -25,8 +25,8 @@ impl Exchange for MexcLauncher {
                             for t in tickers {
                                 if let (Some(s), Some(b), Some(a)) = (t["symbol"].as_str(), t["bidPrice"].as_str(), t["askPrice"].as_str()) {
                                     // Filter for USDT pairs
-                                    if s.ends_with("USDT") {
-                                        let symbol = s.replace("_", "").replace("USDT", "");
+                                    if s.ends_with("USDT") || s.ends_with("_USDT") {
+                                        let symbol = crate::model::normalize_symbol(s);
                                         let bid = Decimal::from_str(b).unwrap_or(Decimal::ZERO);
                                         let ask = Decimal::from_str(a).unwrap_or(Decimal::ZERO);
                                         
