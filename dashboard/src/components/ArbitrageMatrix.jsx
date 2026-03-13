@@ -2,6 +2,13 @@ import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Zap, TrendingUp, TrendingDown } from 'lucide-react';
 
+const formatPrice = (price) => {
+    if (price === 0) return '$0.00';
+    if (price < 0.001) return `$${price.toFixed(8)}`;
+    if (price < 1) return `$${price.toFixed(6)}`;
+    return `$${price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
+};
+
 const ArbitrageMatrix = ({ tickers, botConfig }) => {
     const [sortDirection, setSortDirection] = React.useState('desc'); // 'asc' or 'desc'
 
@@ -66,13 +73,13 @@ const ArbitrageMatrix = ({ tickers, botConfig }) => {
                                     <td className="py-4 px-4">
                                         <div className="text-xs text-slate-500 uppercase font-semibold">{bestLong.exchange}</div>
                                         <div className="text-green-400 font-mono text-sm font-medium">
-                                            ${parseFloat(bestLong.asks[0][0]).toFixed(4)}
+                                            {formatPrice(parseFloat(bestLong.asks[0][0]))}
                                         </div>
                                     </td>
                                     <td className="py-4 px-4">
                                         <div className="text-xs text-slate-500 uppercase font-semibold">{bestShort.exchange}</div>
                                         <div className="text-red-400 font-mono text-sm font-medium">
-                                            ${parseFloat(bestShort.bids[0][0]).toFixed(4)}
+                                            {formatPrice(parseFloat(bestShort.bids[0][0]))}
                                         </div>
                                     </td>
                                     <td className="py-4 px-4 text-right">
@@ -104,11 +111,11 @@ const calculateSpread = (exchanges, botConfig) => {
     if (exchanges.length < 2) return { bestLong: null, bestShort: null, spread: 0 };
 
     const now = Date.now();
-    // Get valid tickers: non-zero AND fresh (last 30s) AND enabled in config
+    // Get valid tickers: non-zero AND fresh (last 15s) AND enabled in config
     const valid = exchanges.filter(e => {
         const ask = parseFloat(e.asks?.[0]?.[0]);
         const bid = parseFloat(e.bids?.[0]?.[0]);
-        const isFresh = (now - e.timestamp) < 30000;
+        const isFresh = (now - e.timestamp) < 15000;
         const isEnabled = botConfig?.enabled_exchanges?.[e.exchange] !== false;
         return ask > 0.00000001 && bid > 0.00000001 && isFresh && isEnabled;
     });
