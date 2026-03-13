@@ -203,8 +203,8 @@ impl Aggregator {
 
                         let account_state = self.account_state.lock().unwrap();
 
-                        // Validate
-                        match self.risk_manager.validate(&ArbitrageOpportunity {
+                        // Validate Risk
+                        let risk_result = self.risk_manager.validate(&ArbitrageOpportunity {
                             symbol: symbol.to_string(),
                             long_exchange: long.exchange,
                             short_exchange: short.exchange,
@@ -212,40 +212,45 @@ impl Aggregator {
                             short_price: b_short.0,
                             spread_pct: net_spread,
                             _timestamp: chrono::Utc::now().timestamp_millis(),
-                        }, &depth_map, &funding_map, &status_map, &r_filters, &ticker_timestamps, &account_state, target_volume).await {
-                            Ok(_) => {
-                                let opp = ArbitrageOpportunity {
-                                    symbol: symbol.to_string(),
-                                    long_exchange: long.exchange,
-                                    short_exchange: short.exchange,
-                                    long_price: b_long.0,
-                                    short_price: b_short.0,
-                                    spread_pct: net_spread,
-                                    _timestamp: chrono::Utc::now().timestamp_millis(),
-                                };
+                        }, &depth_map, &funding_map, &status_map, &r_filters, &ticker_timestamps, &account_state, target_volume).await;
 
-                                if let Err(e) = self.exec_tx.send(opp).await {
-                                    error!("Failed to send opportunity to ExecutionActor: {}", e);
-                                }
+                        let status_text = match &risk_result {
+                            Ok(_) => "✅ *ACTIONABLE*",
+                            Err(e) => &format!("⚠️ *RISK BLOCKED*\n_Reason: {}_", e),
+                        };
 
-                                // Send Telegram Alert
-                                let msg = format!(
-                                    "🚀 *Arbitrage Opportunity Found!*\n\n\
-                                    *Symbol*: {}\n\
-                                    *Long*: {} @ {:.4}\n\
-                                    *Short*: {} @ {:.4}\n\
-                                    *Net Spread*: {:.2}%\n\
-                                    *Target*: $1000",
-                                    symbol, long.exchange, b_long.0, short.exchange, b_short.0, net_spread
-                                );
-                                let n = self.notifier.clone();
-                                tokio::spawn(async move {
-                                    n.send_alert(&msg).await;
-                                });
-                            },
-                            Err(e) => {
-                                info!("Risk Check Failed for {}: {}", symbol, e);
+                        // Send Telegram Alert (Immediate)
+                        let alert_msg = format!(
+                            "{} \n\n\
+                            *Symbol*: {}\n\
+                            *Long*: {} @ {:.4}\n\
+                            *Short*: {} @ {:.4}\n\
+                            *Net Spread*: {:.2}%\n\
+                            *Threshold*: {:.1}%",
+                            status_text, symbol, long.exchange, b_long.0, short.exchange, b_short.0, net_spread, threshold
+                        );
+                        
+                        let n = self.notifier.clone();
+                        tokio::spawn(async move {
+                            n.send_alert(&alert_msg).await;
+                        });
+
+                        if let Ok(_) = risk_result {
+                            let opp = ArbitrageOpportunity {
+                                symbol: symbol.to_string(),
+                                long_exchange: long.exchange,
+                                short_exchange: short.exchange,
+                                long_price: b_long.0,
+                                short_price: b_short.0,
+                                spread_pct: net_spread,
+                                _timestamp: chrono::Utc::now().timestamp_millis(),
+                            };
+
+                            if let Err(e) = self.exec_tx.send(opp).await {
+                                error!("Failed to send opportunity to ExecutionActor: {}", e);
                             }
+                        } else if let Err(e) = risk_result {
+                            info!("Risk Check Failed for {}: {}", symbol, e);
                         }
                     }
                 }
