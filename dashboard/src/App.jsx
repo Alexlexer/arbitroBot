@@ -1,15 +1,51 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRabbitMQ } from './hooks/useRabbitMQ';
 import ArbitrageMatrix from './components/ArbitrageMatrix';
 import AccountSummary from './components/AccountSummary';
 import BotConfig from './components/BotConfig';
 import Settings from './components/Settings';
-import { LayoutDashboard, Settings as SettingsIcon, Zap, ShieldCheck, Bot, Terminal, Cpu } from 'lucide-react';
+import Login from './components/Login';
+import { LayoutDashboard, Settings as SettingsIcon, Zap, ShieldCheck, LogOut } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
+const AUTH_KEY = 'arbitro_dashboard_auth';
+const USERNAME_KEY = 'arbitro_dashboard_username';
+
 function App() {
-  const { tickers, accountState, botConfig, isConnected, sendBotCommand } = useRabbitMQ();
+  const { tickers, accountState, botConfig, isConnected, sendBotCommand, login, register } = useRabbitMQ();
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [username, setUsername] = useState('');
+
+  useEffect(() => {
+    setIsAuthenticated(sessionStorage.getItem(AUTH_KEY) === '1');
+    setUsername(sessionStorage.getItem(USERNAME_KEY) || '');
+  }, []);
+
+  const handleLoginSuccess = (loggedInUsername) => {
+    sessionStorage.setItem(AUTH_KEY, '1');
+    sessionStorage.setItem(USERNAME_KEY, loggedInUsername || '');
+    setIsAuthenticated(true);
+    setUsername(loggedInUsername || '');
+  };
+
+  const handleLogout = () => {
+    sessionStorage.removeItem(AUTH_KEY);
+    sessionStorage.removeItem(USERNAME_KEY);
+    setIsAuthenticated(false);
+    setUsername('');
+  };
+
+  if (!isAuthenticated) {
+    return (
+      <Login
+        onSuccess={handleLoginSuccess}
+        login={login}
+        register={register}
+        isConnected={isConnected}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#020617] text-slate-200 font-sans selection:bg-indigo-500/30">
@@ -63,6 +99,19 @@ function App() {
               <ShieldCheck className="w-4 h-4 text-green-500" />
               <span className="text-xs font-medium text-slate-400">Risk Manager <span className="text-green-500 uppercase">Active</span></span>
             </div>
+            {username && (
+              <span className="text-sm text-slate-400 truncate max-w-[120px]" title={username}>
+                {username}
+              </span>
+            )}
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 transition-all"
+              title="Sign out"
+            >
+              <LogOut className="w-4 h-4" />
+              Sign out
+            </button>
           </div>
         </div>
       </nav>

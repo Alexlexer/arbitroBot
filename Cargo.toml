@@ -28,6 +28,7 @@ base64 = "0.22.1"
 amqprs = { version = "2.1.3", features = ["urispec"] }
 base64-serde = "0.8.0"
 base64-url = "3.0.2"
+argon2 = "0.5"
 
 [package.metadata.deb]
 maintainer = "AlexK <alex@example.com>"

@@ -39,9 +39,9 @@
 ### 3. Funding rate period
 - **Clarity:** Comment in code (or in this doc) that funding is **per 8h** so `rate_pct` and `hours_to_breakeven` are interpreted correctly. Done in comments.
 
-### 4. Price ratio sanity (11×)
-- **Current:** Reject if `price_ratio > 11` (same pair, different exchanges). Avoids unit/symbol mismatch.
-- **Note:** 1.1× is used in the matrix display; 11× is used in detect_sharps. Intentional: strict in detection, looser in display.
+### 4. Price ratio sanity
+- **Bot (detect_sharps):** Reject if `price_ratio > 11` to avoid unit/symbol mismatch.
+- **Dashboard:** Reject if price ratio > 1.5 (50%) and cap displayed spread at 50%. That filters obvious symbol collision (e.g. 85% where "M" is different on each exchange) while allowing real large spreads (e.g. 30%).
 
 ---
 

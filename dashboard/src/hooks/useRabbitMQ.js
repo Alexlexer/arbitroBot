@@ -7,6 +7,7 @@ export const useRabbitMQ = () => {
   const [botConfig, setBotConfig] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
   const clientRef = useRef(null);
+  const authCallbacksRef = useRef({});
 
   const sendBotCommand = (command) => {
     if (clientRef.current && isConnected) {
@@ -15,6 +16,52 @@ export const useRabbitMQ = () => {
         body: JSON.stringify(command),
       });
     }
+  };
+
+  const AUTH_TIMEOUT_MS = 15000; // 15s (registration does Argon2 hashing)
+
+  /** Returns Promise<{ ok, username?, error? }>. Rejects on timeout or not connected. */
+  const login = (username, password) => {
+    return new Promise((resolve, reject) => {
+      if (!clientRef.current || !isConnected) {
+        reject(new Error('Not connected to broker'));
+        return;
+      }
+      const requestId = crypto.randomUUID?.() || `req-${Date.now()}`;
+      authCallbacksRef.current[requestId] = { resolve };
+      sendBotCommand({ type: 'dashboard_login', username, password, request_id: requestId });
+      setTimeout(() => {
+        if (authCallbacksRef.current[requestId]) {
+          delete authCallbacksRef.current[requestId];
+          reject(new Error('Login timeout'));
+        }
+      }, AUTH_TIMEOUT_MS);
+    });
+  };
+
+  /** Returns Promise<{ ok, username?, error? }>. Rejects on timeout or not connected. */
+  const register = (username, password, inviteCode) => {
+    return new Promise((resolve, reject) => {
+      if (!clientRef.current || !isConnected) {
+        reject(new Error('Not connected to broker'));
+        return;
+      }
+      const requestId = crypto.randomUUID?.() || `req-${Date.now()}`;
+      authCallbacksRef.current[requestId] = { resolve };
+      sendBotCommand({
+        type: 'dashboard_register',
+        username,
+        password,
+        invite_code: inviteCode,
+        request_id: requestId,
+      });
+      setTimeout(() => {
+        if (authCallbacksRef.current[requestId]) {
+          delete authCallbacksRef.current[requestId];
+          reject(new Error('Registration timeout'));
+        }
+      }, AUTH_TIMEOUT_MS);
+    });
   };
 
   // Cleanup stale tickers every 10s
@@ -38,8 +85,11 @@ export const useRabbitMQ = () => {
   }, []);
 
   useEffect(() => {
+    // Use same host as the page (so it works when opening http://<machine>:5173)
+    const host = typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1';
+    const brokerURL = `ws://${host}:15674/ws`;
     const client = new Client({
-      brokerURL: 'ws://127.0.0.1:15674/ws',
+      brokerURL,
       connectHeaders: {
         login: 'guest',
         passcode: 'guest',
@@ -78,6 +128,17 @@ export const useRabbitMQ = () => {
         console.log('Bot config received');
         setBotConfig(JSON.parse(message.body));
       });
+
+      // Subscribe to dashboard auth replies
+      client.subscribe('/exchange/arbit_hub/dashboard.auth', (message) => {
+        const body = JSON.parse(message.body);
+        const { ok, request_id, username, error } = body;
+        const cb = authCallbacksRef.current[request_id];
+        if (cb) {
+          delete authCallbacksRef.current[request_id];
+          cb.resolve({ ok, username: username || null, error: error || null });
+        }
+      });
     };
 
     client.onStompError = (frame) => {
@@ -97,5 +158,5 @@ export const useRabbitMQ = () => {
     };
   }, []);
 
-  return { tickers, accountState, botConfig, isConnected, sendBotCommand };
+  return { tickers, accountState, botConfig, isConnected, sendBotCommand, login, register };
 };

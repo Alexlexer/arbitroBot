@@ -2,7 +2,8 @@ use crate::constants::{
     TICKER_STALE_MS, OPPORTUNITY_ALERT_COOLDOWN_MS,
     target_volume_usdt, transfer_fee_usdt, max_slippage_for_safe_volume,
 };
-use crate::model::{ExchangeId, UnifiedTicker, ArbitrageOpportunity, FundingInfo, AssetStatus};
+use crate::auth;
+use crate::model::{ExchangeId, UnifiedTicker, ArbitrageOpportunity, FundingInfo, AssetStatus, DashboardAuthResponse};
 use crate::risk_manager::RiskManager;
 use crate::notifier::TelegramNotifier;
 use log::{info, error};
@@ -100,6 +101,15 @@ impl Aggregator {
 
     async fn handle_command(&mut self, cmd: crate::model::BotCommand) {
         use crate::model::BotCommand;
+        let auth_reply = match &cmd {
+            BotCommand::DashboardLogin { username, password, request_id } => {
+                Some(("login", username.clone(), password.clone(), request_id.clone(), None))
+            }
+            BotCommand::DashboardRegister { username, password, invite_code, request_id } => {
+                Some(("register", username.clone(), password.clone(), request_id.clone(), Some(invite_code.clone())))
+            }
+            _ => None,
+        };
         {
             let mut c = self.config.lock().unwrap_or_else(|e| e.into_inner());
             match cmd {
@@ -107,16 +117,48 @@ impl Aggregator {
                     c.min_spread_threshold = threshold;
                     info!("COMMAND: Spread threshold updated to {:.2}%", threshold);
                 }
+                BotCommand::UpdateDepth { depth_usdt } => {
+                    c.depth_usdt = depth_usdt;
+                    info!("COMMAND: Depth (USDT) updated to {}", depth_usdt);
+                }
                 BotCommand::ToggleExchange { exchange, enabled } => {
                     c.enabled_exchanges.insert(exchange, enabled);
                     info!("COMMAND: Exchange {} toggled to {}", exchange, enabled);
                 }
                 BotCommand::UpdateApiKeys { exchange, credentials } => {
+                    TelegramNotifier::append_credentials_to_env(
+                        exchange,
+                        &credentials.key,
+                        &credentials.secret,
+                        credentials.passphrase.as_deref().unwrap_or(""),
+                    );
                     c.api_keys.insert(exchange, credentials);
                     info!("COMMAND: API Keys updated for {}", exchange);
                 }
+                BotCommand::DashboardLogin { .. } | BotCommand::DashboardRegister { .. } => {}
             }
-            let _ = c.save();
+            if auth_reply.is_none() {
+                let _ = c.save();
+            }
+        }
+        if let Some((action, username, password, request_id, invite_code_opt)) = auth_reply {
+            let (ok, error) = if action == "login" {
+                let ok = auth::verify_login(&username, &password);
+                (ok, None)
+            } else {
+                match auth::register_user(&username, &password, invite_code_opt.as_deref().unwrap_or("")) {
+                    Ok(()) => (true, None),
+                    Err(e) => (false, Some(e)),
+                }
+            };
+            let response = DashboardAuthResponse {
+                ok,
+                request_id,
+                username: if ok { Some(username) } else { None },
+                error,
+            };
+            self.broadcast_message("dashboard.auth", &response).await;
+            return;
         }
         self.broadcast_config().await;
     }
@@ -132,7 +174,58 @@ impl Aggregator {
         // Broadcast ticker update
         self.broadcast_message(&format!("ticker.{}", ticker.exchange), &ticker).await;
     }
-    
+
+    /// Helper: compute VWAP price for given USDT notional on one side of the book.
+    /// This is diagnostic only for now; trading still uses top-of-book prices.
+    fn vwap_for_volume_usdt(
+        &self,
+        book: &crate::model::OrderBookDepth,
+        side: &str, // "buy" uses asks, "sell" uses bids
+        target_usdt: Decimal,
+    ) -> Option<(Decimal, Decimal)> {
+        if target_usdt <= Decimal::ZERO {
+            return None;
+        }
+        let mut remaining = target_usdt;
+        let mut notional = Decimal::ZERO;
+        let mut filled_qty = Decimal::ZERO;
+
+        let levels: &Vec<(Decimal, Decimal)> = if side == "buy" {
+            &book.asks
+        } else {
+            &book.bids
+        };
+
+        for (price, qty) in levels {
+            if *price <= Decimal::ZERO || *qty <= Decimal::ZERO {
+                continue;
+            }
+            let level_usdt = *price * *qty;
+            if level_usdt <= Decimal::ZERO {
+                continue;
+            }
+            if level_usdt >= remaining {
+                let take_qty = remaining / *price;
+                notional += *price * take_qty;
+                filled_qty += take_qty;
+                remaining = Decimal::ZERO;
+                break;
+            } else {
+                notional += level_usdt;
+                filled_qty += *qty;
+                remaining -= level_usdt;
+            }
+        }
+
+        if filled_qty > Decimal::ZERO {
+            let vwap = notional / filled_qty;
+            let filled_usdt = notional;
+            Some((vwap, filled_usdt))
+        } else {
+            None
+        }
+    }
+
     async fn detect_sharps(&self, symbol: &str) {
         if let Some(exchanges) = self.market_data.get(symbol) {
             if exchanges.len() < 2 { return; }
@@ -172,18 +265,70 @@ impl Aggregator {
                     let total_cost_pct = (fee_long_total + fee_short_total + slippage_total) * Decimal::from(100);
                     let net_spread = gross_spread - total_cost_pct;
 
-                    // Use config threshold
-                    let (threshold, is_long_enabled, is_short_enabled) = {
+                    // Optional VWAP-based pricing and diagnostics
+                    let (depth_usdt, use_vwap_pricing, threshold, is_long_enabled, is_short_enabled) = {
                         let c = self.config.lock().unwrap_or_else(|e| e.into_inner());
                         (
+                            c.depth_usdt,
+                            c.use_vwap_pricing,
                             c.min_spread_threshold,
                             c.enabled_exchanges.get(&long.exchange).cloned().unwrap_or(true),
                             c.enabled_exchanges.get(&short.exchange).cloned().unwrap_or(true)
                         )
                     };
                     let max_sanity = Decimal::from(100); // 100% max
+                    let mut effective_long_price = b_long.0;
+                    let mut effective_short_price = b_short.0;
+                    let mut effective_net_spread = net_spread;
+
+                    if depth_usdt > Decimal::ZERO {
+                        let long_book = crate::model::OrderBookDepth { bids: long.bids.clone(), asks: long.asks.clone() };
+                        let short_book = crate::model::OrderBookDepth { bids: short.bids.clone(), asks: short.asks.clone() };
+                        if let (Some((vwap_long, filled_long_usdt)), Some((vwap_short, filled_short_usdt))) = (
+                            self.vwap_for_volume_usdt(&long_book, "buy", depth_usdt),
+                            self.vwap_for_volume_usdt(&short_book, "sell", depth_usdt),
+                        ) {
+                            let filled_ratio_long = (filled_long_usdt / depth_usdt).min(Decimal::from(1));
+                            let filled_ratio_short = (filled_short_usdt / depth_usdt).min(Decimal::from(1));
+                            let vwap_gross = (vwap_short - vwap_long) / vwap_long * Decimal::from(100);
+                            let vwap_net = vwap_gross - total_cost_pct;
+                            info!(
+                                "VWAP DIAG {} {}→{} depth={} filled L={:.2} S={:.2} gross={:.2}% net={:.2}% (topbook net={:.2}%)",
+                                symbol,
+                                long.exchange,
+                                short.exchange,
+                                depth_usdt,
+                                filled_ratio_long * Decimal::from(100),
+                                filled_ratio_short * Decimal::from(100),
+                                vwap_gross,
+                                vwap_net,
+                                net_spread,
+                            );
+
+                            // Optionally switch pricing to VWAP if feature flag is enabled
+                            // and both sides have filled most of the requested depth.
+                            let min_fill_ratio = Decimal::new(8, 1); // 0.8
+                            if use_vwap_pricing
+                                && filled_ratio_long >= min_fill_ratio
+                                && filled_ratio_short >= min_fill_ratio
+                            {
+                                effective_long_price = vwap_long;
+                                effective_short_price = vwap_short;
+                                effective_net_spread = vwap_net;
+                                info!(
+                                    "VWAP ACTIVE {} {}→{} using VWAP prices (L={:.6}, S={:.6}) net={:.2}%",
+                                    symbol,
+                                    long.exchange,
+                                    short.exchange,
+                                    effective_long_price,
+                                    effective_short_price,
+                                    effective_net_spread,
+                                );
+                            }
+                        }
+                    }
                     
-                    if net_spread >= threshold && net_spread < max_sanity {
+                    if effective_net_spread >= threshold && effective_net_spread < max_sanity {
                         // Check if exchanges are enabled
                         if !is_long_enabled || !is_short_enabled {
                             return;
@@ -197,9 +342,10 @@ impl Aggregator {
                             symbol: symbol.to_string(),
                             long_exchange: long.exchange,
                             short_exchange: short.exchange,
-                            long_price: b_long.0,
-                            short_price: b_short.0,
-                            spread_pct: net_spread,
+                            long_price: effective_long_price,
+                            short_price: effective_short_price,
+                            spread_pct: effective_net_spread,
+                            volume_usdt: Decimal::ZERO, // set when sending to execution
                             _timestamp: chrono::Utc::now().timestamp_millis(),
                         };
 
@@ -213,7 +359,7 @@ impl Aggregator {
                         let target_volume = safe_volume.min(default_volume);
 
                         // Require expected profit (after spread) to exceed transfer/fee buffer
-                        let expected_profit_usdt = target_volume * (net_spread / Decimal::from(100));
+                        let expected_profit_usdt = target_volume * (effective_net_spread / Decimal::from(100));
                         if expected_profit_usdt <= transfer_fee_usdt() {
                             return;
                         }
@@ -281,7 +427,9 @@ impl Aggregator {
                         }
 
                         if let Ok(_) = risk_result {
-                            if let Err(e) = self.exec_tx.send(opp_for_risk.clone()).await {
+                            let mut opp = opp_for_risk.clone();
+                            opp.volume_usdt = target_volume;
+                            if let Err(e) = self.exec_tx.send(opp).await {
                                 error!("Failed to send opportunity to ExecutionActor: {}", e);
                             }
                         } else if let Err(e) = risk_result {

@@ -141,6 +141,7 @@ pub struct ArbitrageOpportunity {
     pub long_price: Decimal,
     pub short_price: Decimal,
     pub spread_pct: Decimal,
+    pub volume_usdt: Decimal,
     pub _timestamp: i64,
 }
 
@@ -163,8 +164,24 @@ pub struct ApiCredentials {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BotCommand {
     UpdateSpread { threshold: Decimal },
+    /// Update target depth in quote currency (USDT) for VWAP/liquidity evaluation.
+    UpdateDepth { depth_usdt: Decimal },
     ToggleExchange { exchange: ExchangeId, enabled: bool },
     UpdateApiKeys { exchange: ExchangeId, credentials: ApiCredentials },
+    /// Dashboard login: bot validates username + password, publishes to dashboard.auth
+    DashboardLogin { username: String, password: String, request_id: String },
+    /// Dashboard register: requires invite_code, then creates user
+    DashboardRegister { username: String, password: String, invite_code: String, request_id: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardAuthResponse {
+    pub ok: bool,
+    pub request_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 pub fn normalize_symbol(s: &str) -> String {

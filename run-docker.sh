@@ -14,6 +14,11 @@ if [ ! -f .env ]; then
   cp -n .env.example .env 2>/dev/null || true
 fi
 
+# Restrict permissions on secrets/config (see SECURITY.md)
+chmod 600 .env 2>/dev/null || true
+[ -f config.json ] && chmod 600 config.json 2>/dev/null || true
+[ -f users.json ] && chmod 600 users.json 2>/dev/null || true
+
 echo "Building and starting containers..."
 docker compose up --build -d
 

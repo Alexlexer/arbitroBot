@@ -22,6 +22,24 @@ const BotConfig = ({ config, onCommand }) => {
     }
   };
 
+  const handleDepthChange = (e) => {
+    const val = parseFloat(e.target.value);
+    if (!isNaN(val)) {
+      onCommand({
+        type: 'update_depth',
+        depth_usdt: val,
+      });
+    }
+  };
+
+  const handleToggleVwap = () => {
+    onCommand({
+      type: 'update_depth', // pricing mode flag is only in config for now; kept simple to avoid protocol changes
+      depth_usdt: config.depth_usdt ?? 50,
+    });
+    // use_vwap_pricing currently toggled via config.json; UI shows hint only.
+  };
+
   return (
     <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl border border-slate-800 p-6">
       <div className="flex items-center gap-3 mb-6">
@@ -47,6 +65,28 @@ const BotConfig = ({ config, onCommand }) => {
             onChange={handleSpreadChange}
             className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
           />
+        </div>
+
+        {/* Depth in USDT (for future VWAP/liquidity logic) */}
+        <div>
+          <div className="flex justify-between items-center mb-2">
+            <label className="text-[10px] font-bold uppercase text-slate-500">Depth (USDT)</label>
+            <span className="text-xs font-mono font-bold text-indigo-400">
+              {config.depth_usdt ?? 50}
+            </span>
+          </div>
+          <input
+            type="range"
+            min="10"
+            max="500"
+            step="10"
+            value={config.depth_usdt ?? 50}
+            onChange={handleDepthChange}
+            className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+          />
+          <p className="mt-1 text-[10px] text-slate-500">
+            Используется для VWAP-диагностики и оценки ликвидности; переключение VWAP-прайсинга включается в конфиге.
+          </p>
         </div>
 
         {/* Exchanges Toggle */}

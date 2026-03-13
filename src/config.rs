@@ -10,7 +10,16 @@ pub struct AppConfig {
     pub target_margin_ratio: Decimal,     // 0.2 (20%)
     pub polling_interval_ms: u64,         // 5000
     pub min_spread_threshold: Decimal,    // 5.0 (5%)
+    /// Target depth in quote currency (USDT) to use when evaluating order book liquidity.
+    /// Currently only propagated to dashboard; pricing logic still uses best bid/ask.
+    #[serde(default)]
+    pub depth_usdt: Decimal,
+    /// Feature flag to switch pricing to VWAP-on-depth once implemented.
+    #[serde(default)]
+    pub use_vwap_pricing: bool,
     pub enabled_exchanges: std::collections::HashMap<crate::model::ExchangeId, bool>,
+    /// Never serialized to or deserialized from config.json (secrets stay in .env / memory only)
+    #[serde(skip_serializing, skip_deserializing, default)]
     pub api_keys: std::collections::HashMap<crate::model::ExchangeId, crate::model::ApiCredentials>,
 }
 
@@ -43,6 +52,9 @@ impl AppConfig {
             target_margin_ratio: Decimal::new(2, 1),
             polling_interval_ms: 5000,
             min_spread_threshold: Decimal::from(5),
+             // Sensible starting depth; can be changed from dashboard.
+            depth_usdt: Decimal::from(50),
+            use_vwap_pricing: false,
             enabled_exchanges,
             api_keys: std::collections::HashMap::new(),
         }

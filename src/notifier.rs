@@ -296,25 +296,33 @@ impl TelegramNotifier {
         }
     }
 
-    async fn save_credentials(&self, exchange: crate::model::ExchangeId, key: &str, secret: &str, passphrase: &str) {
+    /// Appends exchange API credentials to .env so they persist across restarts (sync, used by dashboard path too).
+    pub fn append_credentials_to_env(
+        exchange: crate::model::ExchangeId,
+        key: &str,
+        secret: &str,
+        passphrase: &str,
+    ) {
         use std::io::Write;
         let env_path = ".env";
         let prefix = match exchange {
             crate::model::ExchangeId::Binance => "BINANCE",
             crate::model::ExchangeId::Bybit => "BYBIT",
             crate::model::ExchangeId::Bitget => "BITGET",
+            crate::model::ExchangeId::MEXC => "MEXC",
+            crate::model::ExchangeId::Okx => "OKX",
+            crate::model::ExchangeId::Kraken => "KRAKEN",
             _ => return,
         };
 
         let key_line = format!("{}_API_KEY={}\n", prefix, key);
         let secret_line = format!("{}_API_SECRET={}\n", prefix, secret);
         let pass_line = if !passphrase.is_empty() {
-             format!("{}_API_PASSPHRASE={}\n", prefix, passphrase)
+            format!("{}_API_PASSPHRASE={}\n", prefix, passphrase)
         } else {
-             "".to_string()
+            "".to_string()
         };
 
-        // Simple append to .env (not deduplicating for now, just for prototype)
         if let Ok(mut file) = std::fs::OpenOptions::new().append(true).create(true).open(env_path) {
             let _ = file.write_all(key_line.as_bytes());
             let _ = file.write_all(secret_line.as_bytes());
@@ -323,5 +331,9 @@ impl TelegramNotifier {
             }
             info!("Saved {} credentials to .env", prefix);
         }
+    }
+
+    async fn save_credentials(&self, exchange: crate::model::ExchangeId, key: &str, secret: &str, passphrase: &str) {
+        Self::append_credentials_to_env(exchange, key, secret, passphrase);
     }
 }

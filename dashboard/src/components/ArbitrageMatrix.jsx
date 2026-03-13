@@ -128,19 +128,20 @@ const calculateSpread = (exchanges, botConfig) => {
 
     const longPrice = parseFloat(bestLong.asks[0][0]);
     const shortPrice = parseFloat(bestShort.bids[0][0]);
-    
-    // Safety Guard: Relaxed to 11x (1000%) to allow 30%+ spreads
+
+    // Reality check: if the two exchange prices differ by >50% (ratio > 1.5), it's usually a symbol
+    // mismatch (e.g. "M" = different asset per exchange) or bad data. Real large spreads (e.g. 30%) exist.
     const ratio = shortPrice > longPrice ? shortPrice / longPrice : longPrice / shortPrice;
-    if (ratio > 11.0) return { bestLong: null, bestShort: null, spread: 0 };
+    if (ratio > 1.5) return { bestLong: null, bestShort: null, spread: 0 };
 
     const spread = ((shortPrice - longPrice) / longPrice) * 100;
-    
+
     // Threshold Guard: Only show if it meets the bot's minimum spread
     const threshold = botConfig?.min_spread_threshold || 0;
     if (spread < threshold) return { bestLong: null, bestShort: null, spread: 0 };
 
-    // Final sanity check: no spreads > 100% in UI
-    if (Math.abs(spread) > 100) return { bestLong: null, bestShort: null, spread: 0 };
+    // Cap displayed spread at 50% (filter obvious bad data; 30% etc. still show)
+    if (Math.abs(spread) > 50) return { bestLong: null, bestShort: null, spread: 0 };
 
     return { bestLong, bestShort, spread };
 };
