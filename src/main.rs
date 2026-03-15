@@ -4,6 +4,7 @@ mod model;
 mod exchange;
 mod aggregator;
 mod execution;
+mod history;
 mod logger;
 mod risk_manager;
 mod poller;
@@ -15,10 +16,11 @@ mod messaging;
 
 use aggregator::Aggregator;
 use execution::ExecutionActor;
-use model::UnifiedTicker;
+use model::{UnifiedTicker, HistoryOpportunity};
 use rate_limiter::RateLimiter;
 use tokio::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::path::Path;
 
 #[tokio::main]
 async fn main() {
@@ -64,6 +66,37 @@ async fn main() {
         notifier_listener.run_listener().await;
     });
 
+    // History store (SQLite, 10GB cap) + snapshot channel
+    let history_db_path = std::env::var("HISTORY_DB_PATH").unwrap_or_else(|_| "data/arbitro_history.db".to_string());
+    let history_store = history::HistoryStore::new(Path::new(&history_db_path)).ok().map(Arc::new);
+    let (snapshot_tx, snapshot_rx) = mpsc::channel::<Vec<HistoryOpportunity>>(32);
+    let snapshot_tx_for_agg = if let Some(ref store) = history_store {
+        let history_writer = store.clone();
+        tokio::spawn(async move {
+            let mut rx = snapshot_rx;
+            while let Some(opportunities) = rx.recv().await {
+                if let Err(e) = history_writer.add_snapshot(opportunities) {
+                    log::warn!("History write failed: {}", e);
+                }
+            }
+        });
+        let history_api_port: u16 = std::env::var("HISTORY_API_PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(8080);
+        let history_api_store = store.clone();
+        tokio::spawn(async move {
+            let app = history::router(history_api_store);
+            let addr = std::net::SocketAddr::from(([0, 0, 0, 0], history_api_port));
+            if let Err(e) = axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app).await {
+                log::warn!("History API server error: {}", e);
+            }
+        });
+        log::info!("History API listening on port {} (DB: {})", history_api_port, history_db_path);
+        Some(snapshot_tx)
+    } else {
+        log::warn!("History store disabled (could not open {}), History tab will be empty", history_db_path);
+        drop(snapshot_rx);
+        None
+    };
+
     // Channels
     let (tx, rx) = mpsc::channel::<UnifiedTicker>(1000);
     let (cmd_tx, cmd_rx) = mpsc::channel::<crate::model::BotCommand>(10);
@@ -93,6 +126,6 @@ async fn main() {
 
     // Run Aggregator (Main Thread)
     let account_state = poller_handle.account_state.clone();
-    let mut aggregator = Aggregator::new(rx, cmd_rx, exec_tx, log_buffer, risk_manager, rebalance_advisor, funding_rates, market_filters, account_state, notifier, messaging, config);
+    let mut aggregator = Aggregator::new(rx, cmd_rx, exec_tx, log_buffer, risk_manager, rebalance_advisor, funding_rates, market_filters, account_state, notifier, messaging, config, snapshot_tx_for_agg);
     aggregator.run().await;
 }

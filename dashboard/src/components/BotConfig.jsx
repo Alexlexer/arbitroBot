@@ -67,25 +67,25 @@ const BotConfig = ({ config, onCommand }) => {
           />
         </div>
 
-        {/* Depth in USDT (for future VWAP/liquidity logic) */}
+        {/* Depth in USDT (VWAP / liquidity) */}
         <div>
           <div className="flex justify-between items-center mb-2">
             <label className="text-[10px] font-bold uppercase text-slate-500">Depth (USDT)</label>
             <span className="text-xs font-mono font-bold text-indigo-400">
-              {config.depth_usdt ?? 50}
+              {Math.min(5000, Math.max(100, config.depth_usdt ?? 50))}
             </span>
           </div>
           <input
             type="range"
-            min="10"
-            max="500"
-            step="10"
-            value={config.depth_usdt ?? 50}
+            min={100}
+            max={5000}
+            step={100}
+            value={Math.min(5000, Math.max(100, config.depth_usdt ?? 50))}
             onChange={handleDepthChange}
             className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
           />
           <p className="mt-1 text-[10px] text-slate-500">
-            Используется для VWAP-диагностики и оценки ликвидности; переключение VWAP-прайсинга включается в конфиге.
+            Диапазон 100 – 5000 USDT. VWAP-диагностика и оценка ликвидности.
           </p>
         </div>
 

@@ -8,7 +8,6 @@ pub mod bitget;
 pub mod mexc;
 pub mod bitmart;
 pub mod kraken;
-pub mod ourbit;
 pub mod gate;
 
 /// Exponential backoff delay for WebSocket reconnection (secs). Caps at 120s.
@@ -30,7 +29,6 @@ pub async fn launch_all(tx: Sender<UnifiedTicker>) {
     use crate::exchange::mexc::MexcLauncher;
     use crate::exchange::bitmart::BitmartLauncher;
     use crate::exchange::kraken::KrakenLauncher;
-    use crate::exchange::ourbit::OurbitLauncher;
     use crate::exchange::Exchange;
 
     // Binance
@@ -84,15 +82,6 @@ pub async fn launch_all(tx: Sender<UnifiedTicker>) {
         let mut kraken = KrakenLauncher;
         if let Err(e) = kraken.connect(tx_kraken).await {
             log::error!("Kraken launch failed: {}", e);
-        }
-    });
-
-    // Ourbit
-    let tx_ourbit = tx.clone();
-    tokio::spawn(async move {
-        let mut ourbit = OurbitLauncher;
-        if let Err(e) = ourbit.connect(tx_ourbit).await {
-            log::error!("Ourbit launch failed: {}", e);
         }
     });
 

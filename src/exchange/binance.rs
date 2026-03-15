@@ -15,7 +15,7 @@ use url::Url;
 pub struct BinanceLauncher;
 
 /// Max symbols in one combined stream URL (URL length limit ~2048).
-const BINANCE_DEPTH_SYMBOLS_LIMIT: usize = 80;
+const BINANCE_DEPTH_SYMBOLS_LIMIT: usize = 120;
 
 #[async_trait]
 impl Exchange for BinanceLauncher {
@@ -33,7 +33,7 @@ impl Exchange for BinanceLauncher {
                 Ok(s) => s,
                 Err(e) => {
                     error!("Binance: failed to fetch symbols: {}", e);
-                    vec!["BTCUSDT".into(), "ETHUSDT".into()]
+                    vec![]
                 }
             };
             let symbols: Vec<String> = symbols

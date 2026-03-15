@@ -3,7 +3,7 @@ use crate::constants::{
     target_volume_usdt, transfer_fee_usdt, max_slippage_for_safe_volume,
 };
 use crate::auth;
-use crate::model::{ExchangeId, UnifiedTicker, ArbitrageOpportunity, FundingInfo, AssetStatus, DashboardAuthResponse};
+use crate::model::{ExchangeId, UnifiedTicker, ArbitrageOpportunity, FundingInfo, AssetStatus, DashboardAuthResponse, HistoryOpportunity};
 use crate::risk_manager::RiskManager;
 use crate::notifier::TelegramNotifier;
 use log::{info, error};
@@ -32,6 +32,14 @@ pub struct Aggregator {
     // Symbol -> Exchange -> Ticker
     market_data: HashMap<String, HashMap<ExchangeId, UnifiedTicker>>,
     config: Arc<Mutex<crate::config::AppConfig>>,
+    /// Tickers received per exchange (reset every FEED_LOG_INTERVAL)
+    ticker_counts: HashMap<ExchangeId, u64>,
+    /// Tick count for periodic feed log (every 7 ticks = 14s)
+    feed_log_ticks: u32,
+    /// Snapshot channel for history (every ~5 min). None if history disabled.
+    snapshot_tx: Option<Sender<Vec<HistoryOpportunity>>>,
+    /// Tick count for snapshot (every 150 ticks = 5 min)
+    snapshot_ticks: u32,
 }
 
 impl Aggregator {
@@ -48,6 +56,7 @@ impl Aggregator {
         notifier: Arc<TelegramNotifier>,
         messaging: crate::messaging::SharedMessaging,
         config: Arc<Mutex<crate::config::AppConfig>>,
+        snapshot_tx: Option<Sender<Vec<HistoryOpportunity>>>,
     ) -> Self {
         Self {
             rx,
@@ -66,6 +75,10 @@ impl Aggregator {
             messaging,
             market_data: HashMap::new(),
             config,
+            ticker_counts: HashMap::new(),
+            feed_log_ticks: 0,
+            snapshot_tx,
+            snapshot_ticks: 0,
         }
     }
 
@@ -90,6 +103,35 @@ impl Aggregator {
                     self.handle_command(cmd).await;
                 }
                 _ = interval.tick() => {
+                    self.feed_log_ticks += 1;
+                    if self.feed_log_ticks >= 7 {
+                        self.feed_log_ticks = 0;
+                        let mut parts: Vec<String> = self.ticker_counts.iter()
+                            .map(|(ex, n)| format!("{}: {}", ex, n))
+                            .collect();
+                        parts.sort();
+                        info!("FEED {}", parts.join(", "));
+                        self.ticker_counts.clear();
+                    }
+                    self.snapshot_ticks += 1;
+                    if self.snapshot_ticks >= 150 {
+                        self.snapshot_ticks = 0;
+                        if let Some(ref tx) = self.snapshot_tx {
+                            let opportunities = self.current_opportunities(30);
+                            let payload: Vec<HistoryOpportunity> = opportunities
+                                .into_iter()
+                                .map(|(sym, l_ex, l_p, s_ex, s_p, _gross, net)| HistoryOpportunity {
+                                    symbol: sym,
+                                    long_exchange: format!("{:?}", l_ex),
+                                    long_price: l_p.to_string().parse::<f64>().unwrap_or(0.0),
+                                    short_exchange: format!("{:?}", s_ex),
+                                    short_price: s_p.to_string().parse::<f64>().unwrap_or(0.0),
+                                    spread: net.to_string().parse::<f64>().unwrap_or(0.0),
+                                })
+                                .collect();
+                            let _ = tx.try_send(payload);
+                        }
+                    }
                     self.print_arbitrage_matrix();
                     self.check_rebalancing().await;
                     self.broadcast_state().await;
@@ -164,6 +206,7 @@ impl Aggregator {
     }
 
     async fn update_market_data(&mut self, ticker: UnifiedTicker) {
+        *self.ticker_counts.entry(ticker.exchange).or_insert(0) += 1;
         let symbol = ticker.symbol.clone();
         let entry = self.market_data.entry(symbol.clone()).or_insert_with(HashMap::new);
         entry.insert(ticker.exchange, ticker.clone());
@@ -441,35 +484,8 @@ impl Aggregator {
         }
     }
 
-    fn print_arbitrage_matrix(&self) {
-        use crossterm::{execute, terminal::{Clear, ClearType}, cursor::{MoveTo, Hide}};
-        use std::io::stdout;
-        use prettytable::{Table, Row, Cell, format};
-
-        let mut stdout = stdout();
-        
-        // 1. Reset Cursor to Top
-        // We use ClearType::All to ensure we wipe the slate clean every frame.
-        let _ = execute!(stdout, Hide, Clear(ClearType::All), MoveTo(0, 0));
-
-        let threshold = self.config.lock().unwrap_or_else(|e| e.into_inner()).min_spread_threshold;
-        println!("=== ARBITRAGE MATRIX (Threshold: {:.1}%+) ===", threshold);
-        println!("Last Update: {}", chrono::Local::now().format("%H:%M:%S"));
-
-        // 2. Plot Equity Summary
-        if let Ok(state) = self.account_state.lock() {
-            println!("\n[ BALANCE MONITOR ]");
-            println!("Total Equity: ${:.2} USDT | Global PnL: ${:.2}", 
-                state.total_equity_usdt, state.total_unrealized_pnl);
-            
-            let mut summary = String::new();
-            for (ex, s) in &state.exchange_states {
-                summary.push_str(&format!("{}: ${:.1} ", ex, s.total_equity));
-            }
-            println!("Exchanges: {}", summary);
-            println!("--------------------------------------------------");
-        }
-
+    /// Build current opportunities (same logic as matrix), sorted by net spread desc, limited.
+    fn current_opportunities(&self, limit: usize) -> Vec<(String, ExchangeId, Decimal, ExchangeId, Decimal, Decimal, Decimal)> {
         let mut opportunities = Vec::new();
 
         for (symbol, exchanges) in &self.market_data {
@@ -537,6 +553,39 @@ impl Aggregator {
         }
 
         opportunities.sort_by(|a, b| b.6.partial_cmp(&a.6).unwrap_or(std::cmp::Ordering::Equal));
+        if opportunities.len() > limit {
+            opportunities.truncate(limit);
+        }
+        opportunities
+    }
+
+    fn print_arbitrage_matrix(&self) {
+        use crossterm::{execute, terminal::{Clear, ClearType}, cursor::{MoveTo, Hide}};
+        use std::io::stdout;
+        use prettytable::{Table, Row, Cell, format};
+
+        let mut stdout = stdout();
+        
+        let _ = execute!(stdout, Hide, Clear(ClearType::All), MoveTo(0, 0));
+
+        let threshold = self.config.lock().unwrap_or_else(|e| e.into_inner()).min_spread_threshold;
+        println!("=== ARBITRAGE MATRIX (Threshold: {:.1}%+) ===", threshold);
+        println!("Last Update: {}", chrono::Local::now().format("%H:%M:%S"));
+
+        if let Ok(state) = self.account_state.lock() {
+            println!("\n[ BALANCE MONITOR ]");
+            println!("Total Equity: ${:.2} USDT | Global PnL: ${:.2}", 
+                state.total_equity_usdt, state.total_unrealized_pnl);
+            
+            let mut summary = String::new();
+            for (ex, s) in &state.exchange_states {
+                summary.push_str(&format!("{}: ${:.1} ", ex, s.total_equity));
+            }
+            println!("Exchanges: {}", summary);
+            println!("--------------------------------------------------");
+        }
+
+        let opportunities = self.current_opportunities(5);
 
         let mut table = Table::new();
         table.set_format(*format::consts::FORMAT_NO_BORDER_LINE_SEPARATOR);
@@ -549,8 +598,7 @@ impl Aggregator {
             Cell::new("Status"),
         ]));
 
-        // Limit table to 5 rows to avoid UI overlap
-        for (sym, l_ex, l_p, s_ex, s_p, gross, net) in opportunities.into_iter().take(5) {
+        for (sym, l_ex, l_p, s_ex, s_p, gross, net) in opportunities {
             let status = if net > Decimal::from(0) { "PROFITABLE" } else { "Loss" };
             table.add_row(Row::new(vec![
                 Cell::new(&sym),

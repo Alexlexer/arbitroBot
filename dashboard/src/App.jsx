@@ -3,9 +3,10 @@ import { useRabbitMQ } from './hooks/useRabbitMQ';
 import ArbitrageMatrix from './components/ArbitrageMatrix';
 import AccountSummary from './components/AccountSummary';
 import BotConfig from './components/BotConfig';
+import HistoryView from './components/HistoryView';
 import Settings from './components/Settings';
 import Login from './components/Login';
-import { LayoutDashboard, Settings as SettingsIcon, Zap, ShieldCheck, LogOut } from 'lucide-react';
+import { LayoutDashboard, Settings as SettingsIcon, Zap, ShieldCheck, LogOut, Activity, History } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const AUTH_KEY = 'arbitro_dashboard_auth';
@@ -14,6 +15,7 @@ const USERNAME_KEY = 'arbitro_dashboard_username';
 function App() {
   const { tickers, accountState, botConfig, isConnected, sendBotCommand, login, register } = useRabbitMQ();
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [dashboardMode, setDashboardMode] = useState('live'); // 'live' | 'history'
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [username, setUsername] = useState('');
 
@@ -70,7 +72,7 @@ function App() {
 
             <div className="flex items-center gap-1">
               <button
-                onClick={() => setActiveTab('dashboard')}
+                onClick={() => { setActiveTab('dashboard'); setDashboardMode('live'); }}
                 className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-semibold transition-all ${
                   activeTab === 'dashboard' 
                     ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/20' 
@@ -80,6 +82,32 @@ function App() {
                 <LayoutDashboard className="w-4 h-4" />
                 Dashboard
               </button>
+              {activeTab === 'dashboard' && (
+                <>
+                  <button
+                    onClick={() => setDashboardMode('live')}
+                    className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                      dashboardMode === 'live'
+                        ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/30'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+                    }`}
+                  >
+                    <Activity className="w-4 h-4" />
+                    Live
+                  </button>
+                  <button
+                    onClick={() => setDashboardMode('history')}
+                    className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                      dashboardMode === 'history'
+                        ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/30'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+                    }`}
+                  >
+                    <History className="w-4 h-4" />
+                    History
+                  </button>
+                </>
+              )}
               <button
                 onClick={() => setActiveTab('settings')}
                 className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-semibold transition-all ${
@@ -121,20 +149,26 @@ function App() {
         <AnimatePresence mode="wait">
           {activeTab === 'dashboard' ? (
             <motion.div
-              key="dashboard"
+              key={`dashboard-${dashboardMode}`}
               initial={{ opacity: 0, scale: 0.98 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.98 }}
               transition={{ duration: 0.2 }}
-              className="grid grid-cols-1 xl:grid-cols-12 gap-8"
+              className={dashboardMode === 'history' ? '' : 'grid grid-cols-1 xl:grid-cols-12 gap-8'}
             >
-              <div className="xl:col-span-8 space-y-8">
-                <ArbitrageMatrix tickers={tickers} botConfig={botConfig} />
-              </div>
-              <div className="xl:col-span-4 space-y-8">
-                <AccountSummary state={accountState} isConnected={isConnected} tickers={tickers} botConfig={botConfig} />
-                <BotConfig config={botConfig} onCommand={sendBotCommand} />
-              </div>
+              {dashboardMode === 'live' ? (
+                <>
+                  <div className="xl:col-span-8 space-y-8">
+                    <ArbitrageMatrix tickers={tickers} botConfig={botConfig} />
+                  </div>
+                  <div className="xl:col-span-4 space-y-8">
+                    <AccountSummary state={accountState} isConnected={isConnected} tickers={tickers} botConfig={botConfig} />
+                    <BotConfig config={botConfig} onCommand={sendBotCommand} />
+                  </div>
+                </>
+              ) : (
+                <HistoryView />
+              )}
             </motion.div>
           ) : (
             <motion.div

@@ -13,7 +13,6 @@ const ALL_EXCHANGES = [
   { id: 'kraken', configKey: 'Kraken', name: 'Kraken', icon: '🐙' },
   { id: 'gate', configKey: 'Gate', name: 'Gate', icon: '🟠' },
   { id: 'bitmart', configKey: 'Bitmart', name: 'Bitmart', icon: '🟣' },
-  { id: 'ourbit', configKey: 'Ourbit', name: 'Ourbit', icon: '🔷' },
 ];
 
 const Settings = () => {

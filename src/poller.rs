@@ -70,7 +70,7 @@ impl DataPoller {
             }
 
             // 4. Extra Exchanges (Simplified Filters)
-            for eid in &[ExchangeId::MEXC, ExchangeId::Bitmart, ExchangeId::Gate, ExchangeId::Kraken, ExchangeId::Ourbit] {
+            for eid in &[ExchangeId::MEXC, ExchangeId::Bitmart, ExchangeId::Gate, ExchangeId::Kraken] {
                 if self.rate_limiter.check_limit(*eid, false, 2.0).await {
                     if let Ok(filters) = self.fetch_generic_filters(&client, *eid).await {
                         new_filters.insert(*eid, filters);
@@ -690,11 +690,10 @@ impl DataPoller {
 
     async fn fetch_generic_filters(&self, client: &reqwest::Client, eid: ExchangeId) -> Result<HashMap<String, crate::model::SymbolMarketFilters>, Box<dyn std::error::Error>> {
         let url = match eid {
-            ExchangeId::MEXC => "https://api.mexc.com/api/v3/exchangeInfo",
-            ExchangeId::Bitmart => "https://api-cloud.bitmart.com/spot/v1/symbols",
-            ExchangeId::Gate => "https://api.gateio.ws/api/v4/spot/currency_pairs",
+            ExchangeId::MEXC => "https://api.mexc.com/api/v1/contract/detail",
+            ExchangeId::Bitmart => "https://api-cloud-v2.bitmart.com/contract/public/details",
+            ExchangeId::Gate => "https://fx-api.gateio.ws/api/v4/futures/usdt/contracts",
             ExchangeId::Kraken => "https://api.kraken.com/0/public/AssetPairs",
-            ExchangeId::Ourbit => "https://api.ourbit.com/api/v1/exchangeInfo",
             _ => return Ok(HashMap::new()),
         };
 
@@ -704,36 +703,43 @@ impl DataPoller {
 
         match eid {
             ExchangeId::MEXC => {
-                if let Some(symbols) = json["symbols"].as_array() {
-                    for s in symbols {
-                        let symbol = crate::model::normalize_symbol(s["symbol"].as_str().unwrap_or(""));
-                        map.insert(symbol, crate::model::SymbolMarketFilters { min_notional: Decimal::from(5), is_trading: true });
+                if let Some(data) = json.get("data") {
+                    if let Some(arr) = data.as_array() {
+                        for s in arr {
+                            let symbol = crate::model::normalize_symbol(s["symbol"].as_str().unwrap_or(""));
+                            let state = s["state"].as_i64().unwrap_or(0);
+                            map.insert(symbol, crate::model::SymbolMarketFilters { min_notional: Decimal::from(5), is_trading: state == 0 });
+                        }
+                    } else if let Some(obj) = data.as_object() {
+                        if let Some(sym) = obj.get("symbol").and_then(|s| s.as_str()) {
+                            let state = obj.get("state").and_then(|v| v.as_i64()).unwrap_or(0);
+                            map.insert(crate::model::normalize_symbol(sym), crate::model::SymbolMarketFilters { min_notional: Decimal::from(5), is_trading: state == 0 });
+                        }
                     }
                 }
             }
             ExchangeId::Bitmart => {
-                if let Some(symbols) = json["symbols"].as_array() {
-                    for s in symbols {
-                        let symbol = crate::model::normalize_symbol(s["symbol"].as_str().unwrap_or(""));
-                        let status = s["status"].as_str().unwrap_or("");
-                        map.insert(symbol, crate::model::SymbolMarketFilters { min_notional: Decimal::from(5), is_trading: status == "ENABLED" });
+                if json["code"].as_i64() == Some(1000) {
+                    let data = json.get("data");
+                    if let Some(symbols) = data.and_then(|d| d.get("symbols")).and_then(|s| s.as_array()) {
+                        for s in symbols {
+                            let symbol = crate::model::normalize_symbol(s["symbol"].as_str().unwrap_or(""));
+                            let status = s["status"].as_str().unwrap_or("");
+                            map.insert(symbol, crate::model::SymbolMarketFilters { min_notional: Decimal::from(5), is_trading: status == "Trading" });
+                        }
+                    } else if let Some(one) = data.and_then(|d| d.as_object()) {
+                        if let Some(sym) = one.get("symbol").and_then(|s| s.as_str()) {
+                            let status = one.get("status").and_then(|s| s.as_str()).unwrap_or("");
+                            map.insert(crate::model::normalize_symbol(sym), crate::model::SymbolMarketFilters { min_notional: Decimal::from(5), is_trading: status == "Trading" });
+                        }
                     }
                 }
             }
             ExchangeId::Gate => {
                 if let Some(arr) = json.as_array() {
                     for item in arr {
-                        let symbol = crate::model::normalize_symbol(item["id"].as_str().unwrap_or(""));
-                        let status = item["trade_status"].as_str().unwrap_or("");
-                        map.insert(symbol, crate::model::SymbolMarketFilters { min_notional: Decimal::from(1), is_trading: status == "tradable" });
-                    }
-                }
-            }
-            ExchangeId::Ourbit => {
-                if let Some(symbols) = json["symbols"].as_array() {
-                    for s in symbols {
-                        let symbol = crate::model::normalize_symbol(s["symbol"].as_str().unwrap_or(""));
-                        map.insert(symbol, crate::model::SymbolMarketFilters { min_notional: Decimal::from(5), is_trading: true });
+                        let symbol = crate::model::normalize_symbol(item["name"].as_str().unwrap_or(item["id"].as_str().unwrap_or("")));
+                        map.insert(symbol, crate::model::SymbolMarketFilters { min_notional: Decimal::from(1), is_trading: true });
                     }
                 }
             }

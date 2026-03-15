@@ -64,7 +64,8 @@ export const useRabbitMQ = () => {
     });
   };
 
-  // Cleanup stale tickers every 10s
+  // Keep tickers in state for 5 minutes; cleanup run every 30s
+  const TICKER_RETAIN_MS = 5 * 60 * 1000;
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now();
@@ -72,7 +73,7 @@ export const useRabbitMQ = () => {
         const fresh = {};
         let changed = false;
         Object.entries(prev).forEach(([key, ticker]) => {
-          if (now - ticker.timestamp < 60000) {
+          if (now - ticker.timestamp < TICKER_RETAIN_MS) {
             fresh[key] = ticker;
           } else {
             changed = true;
@@ -80,7 +81,7 @@ export const useRabbitMQ = () => {
         });
         return changed ? fresh : prev;
       });
-    }, 10000);
+    }, 30000);
     return () => clearInterval(interval);
   }, []);
 

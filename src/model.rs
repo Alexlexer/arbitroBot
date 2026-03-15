@@ -63,7 +63,6 @@ pub enum ExchangeId {
     MEXC,
     Bitmart,
     Kraken,
-    Ourbit,
     Gate,
     Okx,
 }
@@ -77,7 +76,6 @@ impl ExchangeId {
             ExchangeId::MEXC => Decimal::new(1, 3),   // 0.1%
             ExchangeId::Bitmart => Decimal::new(1, 3), // 0.1%
             ExchangeId::Kraken => Decimal::new(2, 3),  // 0.2%
-            ExchangeId::Ourbit => Decimal::new(1, 3),  // 0.1%
             ExchangeId::Gate => Decimal::new(5, 4),    // 0.05%
             ExchangeId::Okx => Decimal::new(5, 4),     // 0.05%
         }
@@ -172,6 +170,17 @@ pub enum BotCommand {
     DashboardLogin { username: String, password: String, request_id: String },
     /// Dashboard register: requires invite_code, then creates user
     DashboardRegister { username: String, password: String, invite_code: String, request_id: String },
+}
+
+/// One row for dashboard history API (serializable).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryOpportunity {
+    pub symbol: String,
+    pub long_exchange: String,
+    pub long_price: f64,
+    pub short_exchange: String,
+    pub short_price: f64,
+    pub spread: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

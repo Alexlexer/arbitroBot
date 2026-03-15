@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use rust_decimal::Decimal;
 
+fn default_use_vwap_pricing() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub margin_threshold_low: Decimal,    // 0.4 (40%)
@@ -14,8 +18,8 @@ pub struct AppConfig {
     /// Currently only propagated to dashboard; pricing logic still uses best bid/ask.
     #[serde(default)]
     pub depth_usdt: Decimal,
-    /// Feature flag to switch pricing to VWAP-on-depth once implemented.
-    #[serde(default)]
+    /// Use VWAP-on-depth for spread; if false, best bid/ask is used (fallback for debugging).
+    #[serde(default = "default_use_vwap_pricing")]
     pub use_vwap_pricing: bool,
     pub enabled_exchanges: std::collections::HashMap<crate::model::ExchangeId, bool>,
     /// Never serialized to or deserialized from config.json (secrets stay in .env / memory only)
@@ -41,7 +45,6 @@ impl AppConfig {
         enabled_exchanges.insert(E::MEXC, true);
         enabled_exchanges.insert(E::Bitmart, true);
         enabled_exchanges.insert(E::Kraken, true);
-        enabled_exchanges.insert(E::Ourbit, true);
         enabled_exchanges.insert(E::Gate, true);
         enabled_exchanges.insert(E::Okx, true);
 
@@ -54,7 +57,7 @@ impl AppConfig {
             min_spread_threshold: Decimal::from(5),
              // Sensible starting depth; can be changed from dashboard.
             depth_usdt: Decimal::from(50),
-            use_vwap_pricing: false,
+            use_vwap_pricing: true,
             enabled_exchanges,
             api_keys: std::collections::HashMap::new(),
         }

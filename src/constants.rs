@@ -2,8 +2,8 @@
 
 use rust_decimal::Decimal;
 
-/// Max age of ticker data (ms) before considered stale - reject arbitrage
-pub const TICKER_STALE_MS: i64 = 15_000;
+/// Max age of ticker data (ms) before considered stale - reject arbitrage (only super fresh)
+pub const TICKER_STALE_MS: i64 = 5_000;
 
 /// Target order volume (USDT) for arbitrage opportunities
 pub fn target_volume_usdt() -> Decimal {

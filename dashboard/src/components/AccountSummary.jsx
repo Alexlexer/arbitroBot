@@ -76,13 +76,16 @@ const AccountSummary = ({ state, isConnected, tickers, botConfig }) => {
                                 const s = state.exchange_states[ex];
                                 const isEnabled = botConfig?.enabled_exchanges?.[ex] !== false;
                                 
-                                // Find latest ticker timestamp for this exchange
-                                const exchangeTickers = Object.values(tickers).filter(t => t.exchange === ex);
+                                // Find latest ticker timestamp for this exchange (match case-insensitive)
+                                const exLower = String(ex).toLowerCase();
+                                const exchangeTickers = Object.values(tickers).filter(t => String(t.exchange).toLowerCase() === exLower);
                                 const lastUpdate = exchangeTickers.length > 0 
                                     ? Math.max(...exchangeTickers.map(t => t.timestamp))
                                     : 0;
-                                const isStale = (now - lastUpdate) > 15000;
+                                const isStale = (now - lastUpdate) > 60000;
                                 const isConnected_ex = lastUpdate > 0 && !isStale;
+                                // OKX has no ticker feed in the bot (not implemented)
+                                const noFeedLabel = ex === 'Okx' ? 'No feed' : 'NO DATA';
 
                                 return (
                                     <div key={ex} className={`p-3 rounded-xl border transition-all ${
@@ -94,7 +97,7 @@ const AccountSummary = ({ state, isConnected, tickers, botConfig }) => {
                                                 <div className="text-[10px] text-white uppercase font-black tabular-nums">{ex}</div>
                                             </div>
                                             <div className="text-[9px] font-mono font-bold text-slate-500">
-                                                {lastUpdate > 0 ? `${((now - lastUpdate)/1000).toFixed(0)}s ago` : 'NO DATA'}
+                                                {lastUpdate > 0 ? `${((now - lastUpdate)/1000).toFixed(0)}s ago` : noFeedLabel}
                                             </div>
                                         </div>
                                         {s && (
