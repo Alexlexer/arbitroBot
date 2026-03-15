@@ -189,16 +189,21 @@ const Login = ({ onSuccess, login, register, isConnected }) => {
               </div>
             )}
 
+            {!isConnected && (
+              <p className="text-amber-400/90 text-xs mb-2">
+                Broker disconnected. Open port 15674 on the server (e.g. firewall). Then refresh the page.
+              </p>
+            )}
             <button
               type="submit"
-              disabled={loading || !isConnected}
+              disabled={loading}
               className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-colors"
             >
               {loading
                 ? (mode === 'login' ? 'Signing in…' : 'Creating account…')
                 : isConnected
                   ? (mode === 'login' ? 'Sign in' : 'Create account')
-                  : 'Connecting…'}
+                  : (mode === 'login' ? 'Sign in (will retry connection)' : 'Create account (will retry connection)')}
             </button>
           </form>
         </div>

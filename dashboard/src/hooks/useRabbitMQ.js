@@ -91,24 +91,19 @@ export const useRabbitMQ = () => {
   }, []);
 
   useEffect(() => {
-    // Same-origin /ws when not on localhost (nginx in container proxies to RabbitMQ)
+    // Direct RabbitMQ Web STOMP port (15674). For remote access ensure port 15674 is open on the server.
     const envUrl = typeof import.meta !== 'undefined' && import.meta.env?.VITE_RABBITMQ_WS_URL;
-    const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = typeof window !== 'undefined' ? window.location.host : '127.0.0.1:5174';
     const hostname = typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1';
-    const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
     const brokerURL = (envUrl && envUrl.trim())
       ? envUrl.trim()
-      : !isLocalhost
-        ? `${proto}//${host}/ws`
-        : `ws://${hostname}:15674/ws`;
+      : `ws://${hostname}:15674/ws`;
     const client = new Client({
       brokerURL,
       connectHeaders: {
         login: 'guest',
         passcode: 'guest',
       },
-      debug: isDev ? (str) => console.log('STOMP:', str) : undefined,
+      debug: isDev ? (str) => console.log('STOMP:', str) : () => {},
       reconnectDelay: 5000,
       heartbeatIncoming: 4000,
       heartbeatOutgoing: 4000,
