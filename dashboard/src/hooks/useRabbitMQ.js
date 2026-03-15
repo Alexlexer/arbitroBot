@@ -120,13 +120,19 @@ export const useRabbitMQ = () => {
       if (isDev) console.log('Connected to WebStomp');
       setIsConnected(true);
 
-      client.subscribe('/exchange/arbit_hub/ticker.*', (message) => {
+      const onTickerMessage = (message) => {
         const ticker = JSON.parse(message.body);
         const key = `${ticker.exchange}-${ticker.symbol}`;
         tickerBatchRef.current[key] = ticker;
         if (!batchTimerRef.current) {
           batchTimerRef.current = setInterval(flushTickerBatch, TICKER_BATCH_MS);
         }
+      };
+
+      client.subscribe('/exchange/arbit_hub/ticker.*', onTickerMessage);
+      // Explicit subscriptions so every exchange is received (ticker.* can miss some in STOMP)
+      ['Binance', 'Bybit', 'Bitget', 'MEXC', 'Bitmart', 'Kraken', 'Gate'].forEach((ex) => {
+        client.subscribe(`/exchange/arbit_hub/ticker.${ex}`, onTickerMessage);
       });
 
       client.subscribe('/exchange/arbit_hub/account.state', (message) => {

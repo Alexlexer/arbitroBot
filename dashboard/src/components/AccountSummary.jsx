@@ -8,8 +8,10 @@ const AccountSummary = ({ state, isConnected, tickers, botConfig }) => {
     const lastUpdateByExchange = useMemo(() => {
         const m = {};
         Object.values(tickers || {}).forEach((t) => {
-            const ex = String(t.exchange).toLowerCase();
-            if (!m[ex] || t.timestamp > m[ex]) m[ex] = t.timestamp;
+            const ex = (t.exchange != null ? String(t.exchange) : '').toLowerCase();
+            if (!ex) return;
+            const ts = typeof t.timestamp === 'number' ? t.timestamp : (t.timestamp != null ? parseInt(t.timestamp, 10) : 0);
+            if (!m[ex] || ts > m[ex]) m[ex] = ts;
         });
         return m;
     }, [tickers]);
@@ -30,7 +32,9 @@ const AccountSummary = ({ state, isConnected, tickers, botConfig }) => {
         );
     }
 
-    const exchanges = botConfig?.enabled_exchanges ? Object.keys(botConfig.enabled_exchanges) : Object.keys(state.exchange_states);
+    const exchanges = botConfig?.enabled_exchanges
+        ? Object.keys(botConfig.enabled_exchanges)
+        : (state.exchange_states && typeof state.exchange_states === 'object' ? Object.keys(state.exchange_states) : []);
     const now = Date.now();
 
     return (
@@ -91,9 +95,10 @@ const AccountSummary = ({ state, isConnected, tickers, botConfig }) => {
                             className="grid grid-cols-1 gap-3 overflow-hidden"
                         >
                             {exchanges.map((ex) => {
-                                const s = state.exchange_states[ex];
-                                const isEnabled = botConfig?.enabled_exchanges?.[ex] !== false;
-                                const exLower = String(ex).toLowerCase();
+                                const s = state.exchange_states?.[ex];
+                                const exLower = (ex != null ? String(ex) : '').toLowerCase();
+                                const configKey = botConfig?.enabled_exchanges && Object.keys(botConfig.enabled_exchanges).find(k => k.toLowerCase() === exLower);
+                                const isEnabled = configKey ? botConfig.enabled_exchanges[configKey] !== false : true;
                                 const lastUpdate = lastUpdateByExchange[exLower] ?? 0;
                                 const isStale = (now - lastUpdate) > 60000;
                                 const isConnected_ex = lastUpdate > 0 && !isStale;

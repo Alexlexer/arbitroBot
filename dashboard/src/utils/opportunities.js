@@ -1,3 +1,10 @@
+/** Normalize exchange key for lookup (backend may send "Binance", "MEXC", "Gate"). */
+export function exchangeKey(ex) {
+  if (ex == null) return '';
+  const s = typeof ex === 'string' ? ex : String(ex);
+  return s.toLowerCase();
+}
+
 /** Group tickers by symbol. */
 export function groupBySymbol(tickers) {
   return Object.values(tickers).reduce((acc, t) => {
@@ -5,6 +12,15 @@ export function groupBySymbol(tickers) {
     acc[t.symbol].push(t);
     return acc;
   }, {});
+}
+
+/** Check if exchange is enabled (compare case-insensitively with config keys). */
+function isExchangeEnabled(exchangeName, enabledExchanges) {
+  if (!enabledExchanges || typeof enabledExchanges !== 'object') return true;
+  const key = exchangeKey(exchangeName);
+  const keys = Object.keys(enabledExchanges);
+  const found = keys.find(k => exchangeKey(k) === key);
+  return found === undefined ? true : enabledExchanges[found] !== false;
 }
 
 /** Compute best long/short and spread for one symbol's exchanges. */
@@ -17,7 +33,7 @@ export function calculateSpread(exchanges, botConfig) {
     const ask = parseFloat(e.asks?.[0]?.[0]);
     const bid = parseFloat(e.bids?.[0]?.[0]);
     const isFresh = (now - e.timestamp) < FRESH_MS;
-    const isEnabled = botConfig?.enabled_exchanges?.[e.exchange] !== false;
+    const isEnabled = isExchangeEnabled(e.exchange, botConfig?.enabled_exchanges);
     return ask > 0.00000001 && bid > 0.00000001 && isFresh && isEnabled;
   });
 
