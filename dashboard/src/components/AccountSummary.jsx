@@ -19,7 +19,7 @@ const AccountSummary = ({ state, isConnected, tickers, botConfig }) => {
             ? 'Connecting to broker...'
             : 'Waiting for account data from bot...';
         const hint = !isConnected
-            ? 'Open port 15674 on the server (e.g. ufw allow 15674) or set VITE_RABBITMQ_WS_URL when building the dashboard.'
+            ? 'Check the bot is running; WebSocket uses the same port as the dashboard (/ws).'
             : 'Ensure the bot is running and connected to the same RabbitMQ.';
         return (
             <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl border border-slate-800 p-8 flex flex-col items-center justify-center min-h-[300px] text-slate-500">

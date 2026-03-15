@@ -91,10 +91,15 @@ export const useRabbitMQ = () => {
   }, []);
 
   useEffect(() => {
-    // VITE_RABBITMQ_WS_URL: set at build time when dashboard and broker are on different hosts (e.g. reverse proxy)
+    // Production: use same origin /ws (nginx in container proxies to RabbitMQ) — only port 5174 needed
     const envUrl = typeof import.meta !== 'undefined' && import.meta.env?.VITE_RABBITMQ_WS_URL;
-    const host = typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1';
-    const brokerURL = (envUrl && envUrl.trim()) ? envUrl.trim() : `ws://${host}:15674/ws`;
+    const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = typeof window !== 'undefined' ? window.location.host : '127.0.0.1:5174';
+    const brokerURL = (envUrl && envUrl.trim())
+      ? envUrl.trim()
+      : (typeof import.meta !== 'undefined' && import.meta.env?.PROD)
+        ? `${proto}//${host}/ws`
+        : `ws://${typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1'}:15674/ws`;
     const client = new Client({
       brokerURL,
       connectHeaders: {

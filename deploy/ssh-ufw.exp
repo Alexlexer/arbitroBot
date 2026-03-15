@@ -1,0 +1,17 @@
+#!/usr/bin/expect -f
+# Open port on server via SSH. Usage: ./ssh-ufw.exp [user@host] "ufw allow 15674/tcp && ufw reload"
+set timeout 30
+set remote [lindex $argv 0]
+set cmd [lindex $argv 1]
+if {$remote == ""} { set remote "root@96.62.214.161" }
+if {$cmd == ""} { set cmd "ufw allow 15674/tcp; ufw --force reload; ufw status" }
+set pass $env(DEPLOY_SSH_PASS)
+spawn ssh -o StrictHostKeyChecking=accept-new $remote $cmd
+expect {
+    -re "password:" { send "$pass\r"; exp_continue }
+    "yes/no" { send "yes\r"; exp_continue }
+    eof { }
+    timeout { puts "timeout"; exit 1 }
+}
+wait
+puts "Done."
