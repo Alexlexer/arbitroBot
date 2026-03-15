@@ -91,15 +91,17 @@ export const useRabbitMQ = () => {
   }, []);
 
   useEffect(() => {
-    // Production: use same origin /ws (nginx in container proxies to RabbitMQ) — only port 5174 needed
+    // Same-origin /ws when not on localhost (nginx in container proxies to RabbitMQ)
     const envUrl = typeof import.meta !== 'undefined' && import.meta.env?.VITE_RABBITMQ_WS_URL;
     const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = typeof window !== 'undefined' ? window.location.host : '127.0.0.1:5174';
+    const hostname = typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1';
+    const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
     const brokerURL = (envUrl && envUrl.trim())
       ? envUrl.trim()
-      : (typeof import.meta !== 'undefined' && import.meta.env?.PROD)
+      : !isLocalhost
         ? `${proto}//${host}/ws`
-        : `ws://${typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1'}:15674/ws`;
+        : `ws://${hostname}:15674/ws`;
     const client = new Client({
       brokerURL,
       connectHeaders: {
