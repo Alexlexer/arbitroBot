@@ -16,7 +16,7 @@ services:
     container_name: arbitro-bot
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "9180:8080"
     env_file:
       - .env
     depends_on:
@@ -30,6 +30,6 @@ services:
     container_name: arbitro-dashboard
     restart: unless-stopped
     ports:
-      - "5173:80"
+      - "5174:80"
     depends_on:
       - rabbitmq

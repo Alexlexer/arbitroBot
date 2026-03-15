@@ -2,9 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { History, Calendar, Clock, ChevronLeft } from 'lucide-react';
 import ArbitrageMatrix from './ArbitrageMatrix';
 
-const HISTORY_API_BASE = typeof import.meta !== 'undefined' && import.meta.env?.VITE_HISTORY_API_URL
-  ? import.meta.env.VITE_HISTORY_API_URL
-  : `${typeof window !== 'undefined' ? window.location.protocol : 'http:'}//${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:8080`;
+const getHistoryApiBase = () => {
+  if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_HISTORY_API_URL)
+    return import.meta.env.VITE_HISTORY_API_URL;
+  const protocol = typeof window !== 'undefined' ? window.location.protocol : 'http:';
+  const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+  const port = (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) ? 8080 : 9180;
+  return `${protocol}//${host}:${port}`;
+};
+const HISTORY_API_BASE = getHistoryApiBase();
 
 function formatDate(ts) {
   const d = new Date(ts);

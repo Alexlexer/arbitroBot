@@ -1,6 +1,9 @@
 import { useEffect, useState, useRef } from 'react';
 import { Client } from '@stomp/stompjs';
 
+const TICKER_BATCH_MS = 500;
+const isDev = typeof import.meta !== 'undefined' && import.meta.env?.DEV;
+
 export const useRabbitMQ = () => {
   const [tickers, setTickers] = useState({});
   const [accountState, setAccountState] = useState(null);
@@ -8,6 +11,8 @@ export const useRabbitMQ = () => {
   const [isConnected, setIsConnected] = useState(false);
   const clientRef = useRef(null);
   const authCallbacksRef = useRef({});
+  const tickerBatchRef = useRef({});
+  const batchTimerRef = useRef(null);
 
   const sendBotCommand = (command) => {
     if (clientRef.current && isConnected) {
@@ -86,7 +91,7 @@ export const useRabbitMQ = () => {
   }, []);
 
   useEffect(() => {
-    // Use same host as the page (so it works when opening http://<machine>:5173)
+    // Use same host as the page (so it works when opening http://<machine>:5174)
     const host = typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1';
     const brokerURL = `ws://${host}:15674/ws`;
     const client = new Client({
@@ -95,38 +100,37 @@ export const useRabbitMQ = () => {
         login: 'guest',
         passcode: 'guest',
       },
-      debug: (str) => {
-        console.log('STOMP Debug:', str);
-      },
+      debug: isDev ? (str) => console.log('STOMP:', str) : undefined,
       reconnectDelay: 5000,
       heartbeatIncoming: 4000,
       heartbeatOutgoing: 4000,
     });
 
+    const flushTickerBatch = () => {
+      const batch = tickerBatchRef.current;
+      if (Object.keys(batch).length === 0) return;
+      tickerBatchRef.current = {};
+      setTickers((prev) => ({ ...prev, ...batch }));
+    };
+
     client.onConnect = () => {
-      console.log('Connected to WebStomp');
+      if (isDev) console.log('Connected to WebStomp');
       setIsConnected(true);
-      
-      // Subscribe to all tickers
-      // Format: /exchange/arbit_hub/ticker.<exchange>
+
       client.subscribe('/exchange/arbit_hub/ticker.*', (message) => {
         const ticker = JSON.parse(message.body);
-        console.log('Ticker received:', ticker.symbol, ticker.exchange);
-        setTickers((prev) => ({
-          ...prev,
-          [`${ticker.exchange}-${ticker.symbol}`]: ticker,
-        }));
+        const key = `${ticker.exchange}-${ticker.symbol}`;
+        tickerBatchRef.current[key] = ticker;
+        if (!batchTimerRef.current) {
+          batchTimerRef.current = setInterval(flushTickerBatch, TICKER_BATCH_MS);
+        }
       });
 
-      // Subscribe to account state
       client.subscribe('/exchange/arbit_hub/account.state', (message) => {
-        console.log('Account state received');
         setAccountState(JSON.parse(message.body));
       });
 
-      // Subscribe to bot config
       client.subscribe('/exchange/arbit_hub/bot.config', (message) => {
-        console.log('Bot config received');
         setBotConfig(JSON.parse(message.body));
       });
 
@@ -155,6 +159,9 @@ export const useRabbitMQ = () => {
     clientRef.current = client;
 
     return () => {
+      if (batchTimerRef.current) clearInterval(batchTimerRef.current);
+      batchTimerRef.current = null;
+      tickerBatchRef.current = {};
       client.deactivate();
     };
   }, []);

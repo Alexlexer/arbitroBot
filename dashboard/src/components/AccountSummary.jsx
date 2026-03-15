@@ -1,9 +1,18 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Wallet, Info, Activity, ChevronDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const AccountSummary = ({ state, isConnected, tickers, botConfig }) => {
     const [isExchangesExpanded, setIsExchangesExpanded] = useState(true);
+
+    const lastUpdateByExchange = useMemo(() => {
+        const m = {};
+        Object.values(tickers || {}).forEach((t) => {
+            const ex = String(t.exchange).toLowerCase();
+            if (!m[ex] || t.timestamp > m[ex]) m[ex] = t.timestamp;
+        });
+        return m;
+    }, [tickers]);
 
     if (!state) return (
         <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl border border-slate-800 p-8 flex flex-col items-center justify-center min-h-[300px] text-slate-500">
@@ -75,13 +84,8 @@ const AccountSummary = ({ state, isConnected, tickers, botConfig }) => {
                             {exchanges.map((ex) => {
                                 const s = state.exchange_states[ex];
                                 const isEnabled = botConfig?.enabled_exchanges?.[ex] !== false;
-                                
-                                // Find latest ticker timestamp for this exchange (match case-insensitive)
                                 const exLower = String(ex).toLowerCase();
-                                const exchangeTickers = Object.values(tickers).filter(t => String(t.exchange).toLowerCase() === exLower);
-                                const lastUpdate = exchangeTickers.length > 0 
-                                    ? Math.max(...exchangeTickers.map(t => t.timestamp))
-                                    : 0;
+                                const lastUpdate = lastUpdateByExchange[exLower] ?? 0;
                                 const isStale = (now - lastUpdate) > 60000;
                                 const isConnected_ex = lastUpdate > 0 && !isStale;
                                 // OKX has no ticker feed in the bot (not implemented)

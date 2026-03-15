@@ -1,5 +1,4 @@
 import React from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
 import { Zap, TrendingUp, TrendingDown } from 'lucide-react';
 import { getOpportunities } from '../utils/opportunities';
 
@@ -11,8 +10,8 @@ const formatPrice = (price) => {
     return `$${price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
 };
 
-/** Row can be live shape { symbol, bestLong, bestShort, spread } or snapshot shape { symbol, longExchange, longPrice, shortExchange, shortPrice, spread }. */
-const Row = ({ item, sortDirection }) => {
+/** Row: live { symbol, bestLong, bestShort, spread } or snapshot { symbol, longExchange, longPrice, shortExchange, shortPrice, spread }. Memoized to avoid re-renders. */
+const Row = React.memo(({ item }) => {
     const isSnapshot = 'longExchange' in item;
     const symbol = item.symbol;
     const spread = item.spread;
@@ -22,13 +21,7 @@ const Row = ({ item, sortDirection }) => {
     const shortPrice = isSnapshot ? item.shortPrice : parseFloat(item.bestShort.bids[0][0]);
 
     return (
-        <motion.tr
-            layout
-            initial={{ opacity: 0, scale: 0.98 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.98 }}
-            className="border-b border-slate-800/50 hover:bg-white/5 transition-colors group"
-        >
+        <tr className="border-b border-slate-800/50 hover:bg-white/5 transition-colors group">
             <td className="py-4 px-4 font-mono font-bold text-white group-hover:text-indigo-400 transition-colors">{symbol}</td>
             <td className="py-4 px-4">
                 <div className="text-xs text-slate-500 uppercase font-semibold">{longLabel}</div>
@@ -44,9 +37,9 @@ const Row = ({ item, sortDirection }) => {
                     {spread.toFixed(2)}%
                 </div>
             </td>
-        </motion.tr>
+        </tr>
     );
-};
+});
 
 const ArbitrageMatrix = ({ tickers, botConfig, snapshotOpportunities, snapshotLabel }) => {
     const [sortDirection, setSortDirection] = React.useState('desc');
@@ -94,11 +87,9 @@ const ArbitrageMatrix = ({ tickers, botConfig, snapshotOpportunities, snapshotLa
                         </tr>
                     </thead>
                     <tbody>
-                        <AnimatePresence mode="popLayout">
-                            {limitedOpportunities.map((opp, idx) => (
-                                <Row key={opp.symbol + (opp.timestamp ?? idx)} item={opp} sortDirection={sortDirection} />
-                            ))}
-                        </AnimatePresence>
+                        {limitedOpportunities.map((opp, idx) => (
+                            <Row key={opp.symbol + (opp.timestamp ?? idx)} item={opp} />
+                        ))}
                     </tbody>
                 </table>
             </div>

@@ -24,7 +24,7 @@ Edit your site config (e.g. `/etc/nginx/sites-available/default` or your vhost) 
 
 ```nginx
 location /arbitrobot/ {
-    proxy_pass http://127.0.0.1:5173;
+    proxy_pass http://127.0.0.1:5174;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -54,7 +54,7 @@ sudo systemctl reload nginx
 
 - Docker and Docker Compose v2 installed
 - `.env` present in `/opt/arbitroBot` (copy from your machine or create there)
-- Port 5173 is bound by the dashboard container (only localhost; Nginx proxies to it).
+- Port 5174 is bound by the dashboard container (only localhost; Nginx proxies to it).
 - The dashboard connects to RabbitMQ STOMP at `ws://<server-ip>:15674/ws`. Either expose port 15674 to the internet (so the browser can connect), or add an Nginx WebSocket proxy for `/arbitrobot-ws/` → `127.0.0.1:15674` and change the dashboard to use that path.
 
 Dashboard URL: **http://\<server-ip\>/arbitrobot/**

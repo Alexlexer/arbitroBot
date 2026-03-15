@@ -25,7 +25,7 @@ docker compose up --build -d
 echo ""
 echo "Services:"
 echo "  - RabbitMQ:     localhost:5672 (AMQP), localhost:15672 (management UI)"
-echo "  - Dashboard:    http://localhost:5173"
+echo "  - Dashboard:    http://localhost:5174"
 echo "  - Bot:          running in background (no exposed port)"
 echo ""
 echo "Logs:  docker compose logs -f arbitro-bot"

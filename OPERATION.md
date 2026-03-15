@@ -44,7 +44,7 @@ See `deploy/README.md` for full steps.
 
 ## 3. Dashboard
 
-- **URL**: http://localhost:5173 (or http://\<your-host\>:5173 if accessing from another device).
+- **URL**: http://localhost:5174 (or http://\<your-host\>:5174 if accessing from another device).
 - **WebSocket**: The dashboard connects to `ws://<same-host>:15674/ws`. If you open the dashboard from another machine, that machine must reach port 15674 on the host where Docker runs (e.g. port forwarding or same network).
 - **Check**:
   - Green “System Live” = connected to RabbitMQ (STOMP).

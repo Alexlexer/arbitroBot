@@ -1,0 +1,32 @@
+#!/usr/bin/expect -f
+# Run deploy with SSH password. Usage: ./deploy-with-pass.exp [user@host] [password]
+# Or set DEPLOY_SSH_PASS and optionally DEPLOY_REMOTE.
+set timeout 120
+set remote [lindex $argv 0]
+set pass [lindex $argv 1]
+if {$remote == ""} { set remote "root@96.62.214.161" }
+if {$pass == ""} { set pass $env(DEPLOY_SSH_PASS) }
+set app_dir "/opt/arbitroBot"
+set repo_root [file dirname [file dirname [file normalize $argv0]]]
+
+puts "Deploying to $remote:$app_dir"
+
+spawn rsync -avz --delete --exclude .git --exclude dashboard/node_modules --exclude target --exclude .env -e ssh $repo_root/ $remote:$app_dir/
+expect {
+    -re "password:" { send "$pass\r"; exp_continue }
+    "yes/no" { send "yes\r"; exp_continue }
+    eof { }
+    timeout { puts "timeout"; exit 1 }
+}
+wait
+
+spawn ssh -o StrictHostKeyChecking=accept-new $remote "cd $app_dir && docker compose build && docker compose up -d"
+expect {
+    -re "password:" { send "$pass\r"; exp_continue }
+    "yes/no" { send "yes\r"; exp_continue }
+    eof { }
+    timeout { puts "timeout"; exit 1 }
+}
+expect eof
+wait
+puts "Done."
