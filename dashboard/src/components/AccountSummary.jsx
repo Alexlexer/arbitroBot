@@ -14,12 +14,21 @@ const AccountSummary = ({ state, isConnected, tickers, botConfig }) => {
         return m;
     }, [tickers]);
 
-    if (!state) return (
-        <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl border border-slate-800 p-8 flex flex-col items-center justify-center min-h-[300px] text-slate-500">
-            <Activity className="w-12 h-12 mb-4 animate-pulse" />
-            <p className="font-medium animate-pulse">Waiting for synchronization...</p>
-        </div>
-    );
+    if (!state) {
+        const statusMessage = !isConnected
+            ? 'Connecting to broker...'
+            : 'Waiting for account data from bot...';
+        const hint = !isConnected
+            ? 'Check RabbitMQ is running and reachable (e.g. port 15674).'
+            : 'Ensure the bot is running and connected to the same RabbitMQ.';
+        return (
+            <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl border border-slate-800 p-8 flex flex-col items-center justify-center min-h-[300px] text-slate-500">
+                <Activity className="w-12 h-12 mb-4 animate-pulse" />
+                <p className="font-medium animate-pulse">{statusMessage}</p>
+                <p className="text-xs text-slate-600 mt-2 max-w-xs text-center">{hint}</p>
+            </div>
+        );
+    }
 
     const exchanges = botConfig?.enabled_exchanges ? Object.keys(botConfig.enabled_exchanges) : Object.keys(state.exchange_states);
     const now = Date.now();
