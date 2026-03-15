@@ -50,11 +50,60 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-## 3. Checklist on server
+## 3. RabbitMQ WebSocket (fix "Connecting to broker...")
+
+The dashboard connects to RabbitMQ STOMP at `ws://<host>:15674/ws` (host = page hostname). Choose one:
+
+**Option A – open port 15674 on the server** (simplest)
+
+```bash
+sudo ufw allow 15674/tcp
+sudo ufw reload
+```
+
+Then open the dashboard as `http://<server-ip>:5174` (or via Nginx). The browser will use `ws://<server-ip>:15674/ws`.
+
+**Option B – proxy WebSocket in Nginx** (no extra port)
+
+Add to the same `server { }` block (before or after `/arbitrobot/`):
+
+```nginx
+location /arbitrobot-ws/ {
+    proxy_pass http://127.0.0.1:15674/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_read_timeout 86400;
+}
+```
+
+Then rebuild the dashboard with the WebSocket URL pointing to this path:
+
+```bash
+cd dashboard
+VITE_RABBITMQ_WS_URL=wss://YOUR_DOMAIN/arbitrobot-ws/ws npm run build
+```
+
+Use `wss://` if the site is HTTPS, `ws://` if HTTP. Deploy as usual; the built assets will use this URL.
+
+**Option C – build-time URL** (direct IP/port)
+
+If you always use the same server IP:
+
+```bash
+cd dashboard
+VITE_RABBITMQ_WS_URL=ws://96.62.214.161:15674/ws npm run build
+```
+
+Then run the full deploy from the repo root (Docker will use the new build).
+
+## 4. Checklist on server
 
 - Docker and Docker Compose v2 installed
 - `.env` present in `/opt/arbitroBot` (copy from your machine or create there)
 - Port 5174 is bound by the dashboard container (only localhost; Nginx proxies to it).
-- The dashboard connects to RabbitMQ STOMP at `ws://<server-ip>:15674/ws`. Either expose port 15674 to the internet (so the browser can connect), or add an Nginx WebSocket proxy for `/arbitrobot-ws/` → `127.0.0.1:15674` and change the dashboard to use that path.
+- Port **15674** reachable from the browser (see §3), or dashboard built with `VITE_RABBITMQ_WS_URL`.
 
-Dashboard URL: **http://\<server-ip\>/arbitrobot/**
+Dashboard URL: **http://\<server-ip\>:5174** or **http://\<server-ip\>/arbitrobot/** (if Nginx is configured).

@@ -91,9 +91,10 @@ export const useRabbitMQ = () => {
   }, []);
 
   useEffect(() => {
-    // Use same host as the page (so it works when opening http://<machine>:5174)
+    // VITE_RABBITMQ_WS_URL: set at build time when dashboard and broker are on different hosts (e.g. reverse proxy)
+    const envUrl = typeof import.meta !== 'undefined' && import.meta.env?.VITE_RABBITMQ_WS_URL;
     const host = typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1';
-    const brokerURL = `ws://${host}:15674/ws`;
+    const brokerURL = (envUrl && envUrl.trim()) ? envUrl.trim() : `ws://${host}:15674/ws`;
     const client = new Client({
       brokerURL,
       connectHeaders: {
