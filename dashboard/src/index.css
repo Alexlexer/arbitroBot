@@ -10,7 +10,7 @@ body {
   display: flex;
   min-width: 320px;
   min-height: 100vh;
-  background-color: #020617; /* slate-950 */
+  background-color: #000; /* monochrome */
 }
 
 #root {
@@ -22,14 +22,14 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: #020617;
+  background: #000;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #1e293b;
+  background: #111;
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #334155;
+  background: #222;
 }

@@ -58,30 +58,30 @@ export default function HistoryView() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-2 text-indigo-400 mb-4">
+      <div className="flex items-center gap-2 text-white/70 mb-4">
         <History className="w-5 h-5" />
         <h2 className="text-xl font-bold tracking-tight text-white">History</h2>
-        <span className="text-xs text-slate-500">Last 30 days, backend (10GB cap)</span>
+        <span className="text-xs text-white/60">Last 30 days, backend (10GB cap)</span>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
         <div className="xl:col-span-4 space-y-4">
-          <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl border border-slate-800 p-4">
-            <div className="flex items-center gap-2 text-slate-400 text-sm font-medium mb-3">
+          <div className="bg-black/70 backdrop-blur-xl rounded-2xl border border-white/10 p-4">
+            <div className="flex items-center gap-2 text-white/60 text-sm font-medium mb-3">
               <Calendar className="w-4 h-4" />
               Pick a snapshot
             </div>
             {error ? (
-              <p className="text-rose-400 text-sm">API error: {error}. Is the bot running with history enabled?</p>
+              <p className="text-white/60 text-sm">API error: {error}. Is the bot running with history enabled?</p>
             ) : loading ? (
-              <p className="text-slate-500 text-sm">Loading…</p>
+              <p className="text-white/60 text-sm">Loading…</p>
             ) : snapshots.length === 0 ? (
-              <p className="text-slate-500 text-sm">No snapshots yet. Bot saves every 5 min when running.</p>
+              <p className="text-white/60 text-sm">No snapshots yet. Bot saves every 5 min when running.</p>
             ) : (
               <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
                 {days.map(([dateKey, times]) => (
                   <div key={dateKey}>
-                    <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                    <div className="text-xs font-bold text-white/60 uppercase tracking-wider mb-2">
                       {formatDate(new Date(dateKey).getTime())}
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -92,8 +92,8 @@ export default function HistoryView() {
                           onClick={() => setSelectedTs(ts)}
                           className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-all ${
                             selectedTs === ts
-                              ? 'bg-indigo-600 text-white'
-                              : 'bg-slate-800/80 text-slate-300 hover:bg-slate-700'
+                              ? 'bg-white/10 text-white'
+                              : 'bg-white/5 text-white/70 hover:bg-white/10'
                           }`}
                         >
                           <Clock className="w-3.5 h-3.5" />
@@ -110,9 +110,9 @@ export default function HistoryView() {
 
         <div className="xl:col-span-8">
           {selectedTs == null ? (
-            <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl border border-slate-800 p-12 text-center">
-              <ChevronLeft className="w-10 h-10 text-slate-600 mx-auto mb-3" />
-              <p className="text-slate-400">Select a time on the left to view that snapshot</p>
+            <div className="bg-black/70 backdrop-blur-xl rounded-2xl border border-white/10 p-12 text-center">
+              <ChevronLeft className="w-10 h-10 text-white/50 mx-auto mb-3" />
+              <p className="text-white/60">Select a time on the left to view that snapshot</p>
             </div>
           ) : selectedSnapshot?.opportunities ? (
             <ArbitrageMatrix
@@ -120,8 +120,8 @@ export default function HistoryView() {
               snapshotLabel={snapshotLabel}
             />
           ) : selectedTs != null ? (
-            <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl border border-slate-800 p-12 text-center">
-              <p className="text-slate-400">Loading snapshot…</p>
+            <div className="bg-black/70 backdrop-blur-xl rounded-2xl border border-white/10 p-12 text-center">
+              <p className="text-white/60">Loading snapshot…</p>
             </div>
           ) : null}
         </div>

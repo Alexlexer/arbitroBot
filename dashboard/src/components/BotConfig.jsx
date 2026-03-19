@@ -46,10 +46,10 @@ const BotConfig = ({ config, onCommand }) => {
   };
 
   return (
-    <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl border border-slate-800 p-6">
+    <div className="bg-black/70 backdrop-blur-xl rounded-2xl border border-white/10 p-6">
       <div className="flex items-center gap-3 mb-6">
-        <div className="p-2 bg-indigo-500/10 rounded-lg">
-          <Settings className="w-5 h-5 text-indigo-400" />
+        <div className="p-2 bg-white/5 rounded-lg">
+          <Settings className="w-5 h-5 text-white/70" />
         </div>
         <h2 className="text-sm font-black uppercase tracking-widest text-white">Bot Control</h2>
       </div>
@@ -58,8 +58,8 @@ const BotConfig = ({ config, onCommand }) => {
         {/* Spread Threshold */}
         <div>
           <div className="flex justify-between items-center mb-2">
-            <label className="text-[10px] font-bold uppercase text-slate-500">Min Net Spread %</label>
-            <span className="text-xs font-mono font-bold text-indigo-400">{config.min_spread_threshold}%</span>
+            <label className="text-[10px] font-bold uppercase text-white/60">Min Net Spread %</label>
+            <span className="text-xs font-mono font-bold text-white/70">{config.min_spread_threshold}%</span>
           </div>
           <input 
             type="range" 
@@ -68,15 +68,15 @@ const BotConfig = ({ config, onCommand }) => {
             step="0.1"
             value={config.min_spread_threshold}
             onChange={handleSpreadChange}
-            className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+            className="w-full h-1.5 bg-white/5 rounded-lg appearance-none cursor-pointer accent-white"
           />
         </div>
 
         {/* Depth in USDT (VWAP / liquidity) */}
         <div>
           <div className="flex justify-between items-center mb-2">
-            <label className="text-[10px] font-bold uppercase text-slate-500">Depth (USDT)</label>
-            <span className="text-xs font-mono font-bold text-indigo-400">
+            <label className="text-[10px] font-bold uppercase text-white/60">Depth (USDT)</label>
+            <span className="text-xs font-mono font-bold text-white/70">
               {Math.min(5000, Math.max(100, config.depth_usdt ?? 50))}
             </span>
           </div>
@@ -87,9 +87,9 @@ const BotConfig = ({ config, onCommand }) => {
             step={100}
             value={Math.min(5000, Math.max(100, config.depth_usdt ?? 50))}
             onChange={handleDepthChange}
-            className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+            className="w-full h-1.5 bg-white/5 rounded-lg appearance-none cursor-pointer accent-white"
           />
-          <p className="mt-1 text-[10px] text-slate-500">
+          <p className="mt-1 text-[10px] text-white/60">
             Диапазон 100 – 5000 USDT. VWAP-диагностика и оценка ликвидности.
           </p>
         </div>
@@ -97,7 +97,7 @@ const BotConfig = ({ config, onCommand }) => {
         {/* Exchanges Toggle */}
         {/* Listener WS URL */}
         <div>
-          <label className="text-[10px] font-bold uppercase text-slate-500 mb-2 block">
+          <label className="text-[10px] font-bold uppercase text-white/60 mb-2 block">
             Listener WS URL (alerts)
           </label>
           <input
@@ -105,24 +105,24 @@ const BotConfig = ({ config, onCommand }) => {
             value={listenerWsUrlDraft}
             onChange={(e) => setListenerWsUrlDraft(e.target.value)}
             placeholder="ws://listener-host:8083/ws"
-            className="w-full px-4 py-3 bg-slate-800/80 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/50"
+            className="w-full px-4 py-3 bg-slate-800/80 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-white/20 focus:border-white/10"
           />
           <div className="flex items-center gap-3 mt-3">
             <button
               onClick={() => onCommand({ type: 'update_listener_ws_url', url: listenerWsUrlDraft })}
-              className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-sm font-semibold text-white transition-colors"
+              className="flex-1 py-2.5 bg-white/10 hover:bg-white/5 rounded-xl text-sm font-semibold text-white transition-colors"
             >
               Set Listener URL
             </button>
           </div>
-          <p className="mt-2 text-[10px] text-slate-500">
+          <p className="mt-2 text-[10px] text-white/60">
             Leave empty to disable listener integration.
           </p>
         </div>
 
         {/* Exchanges Toggle */}
         <div>
-          <label className="text-[10px] font-bold uppercase text-slate-500 mb-3 block">Active Exchanges</label>
+          <label className="text-[10px] font-bold uppercase text-white/60 mb-3 block">Active Exchanges</label>
           <div className="grid grid-cols-2 gap-2">
             {Object.keys(config.enabled_exchanges).map((ex) => (
               <button
@@ -130,8 +130,8 @@ const BotConfig = ({ config, onCommand }) => {
                 onClick={() => handleToggle(ex)}
                 className={`flex items-center justify-between p-2 rounded-lg border text-[10px] font-bold transition-all ${
                   config.enabled_exchanges[ex] 
-                    ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-300' 
-                    : 'bg-slate-950/50 border-slate-800 text-slate-600 grayscale'
+                    ? 'bg-white/5 border-white/10 text-white/70' 
+                    : 'bg-white/2 border-white/5 text-white/40 grayscale'
                 }`}
               >
                 {ex}

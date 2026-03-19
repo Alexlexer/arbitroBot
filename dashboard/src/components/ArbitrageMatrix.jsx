@@ -21,19 +21,19 @@ const Row = React.memo(({ item }) => {
     const shortPrice = isSnapshot ? item.shortPrice : parseFloat(item.bestShort.bids[0][0]);
 
     return (
-        <tr className="border-b border-slate-800/50 hover:bg-white/5 transition-colors group">
-            <td className="py-4 px-4 font-mono font-bold text-white group-hover:text-indigo-400 transition-colors">{symbol}</td>
+        <tr className="border-b border-white/10 hover:bg-white/5 transition-colors group">
+            <td className="py-4 px-4 font-mono font-bold text-white/90 group-hover:text-white transition-colors">{symbol}</td>
             <td className="py-4 px-4">
-                <div className="text-xs text-slate-500 uppercase font-semibold">{longLabel}</div>
-                <div className="text-green-400 font-mono text-sm font-medium">{formatPrice(longPrice)}</div>
+                <div className="text-xs text-white/60 uppercase font-semibold">{longLabel}</div>
+                <div className="text-white/70 font-mono text-sm font-medium">{formatPrice(longPrice)}</div>
             </td>
             <td className="py-4 px-4">
-                <div className="text-xs text-slate-500 uppercase font-semibold">{shortLabel}</div>
-                <div className="text-red-400 font-mono text-sm font-medium">{formatPrice(shortPrice)}</div>
+                <div className="text-xs text-white/60 uppercase font-semibold">{shortLabel}</div>
+                <div className="text-white/70 font-mono text-sm font-medium">{formatPrice(shortPrice)}</div>
             </td>
             <td className="py-4 px-4 text-right">
-                <div className={`inline-flex items-center gap-1 rounded-full px-3 py-1 font-mono text-sm font-bold ${spread > 0 ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'}`}>
-                    {spread > 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                <div className={`inline-flex items-center gap-1 rounded-full px-3 py-1 font-mono text-sm font-bold ${spread > 0 ? 'bg-white/5 text-white/90 border border-white/10' : 'bg-white/5 text-white/90 border border-white/10'}`}>
+                    {spread > 0 ? <TrendingUp className="w-3 h-3 text-white/70" /> : <TrendingDown className="w-3 h-3 text-white/70" />}
                     {spread.toFixed(2)}%
                 </div>
             </td>
@@ -62,11 +62,11 @@ const ArbitrageMatrix = ({ tickers, botConfig, snapshotOpportunities, snapshotLa
     const count = limitedOpportunities.length;
 
     return (
-        <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl border border-slate-800 p-6 shadow-2xl flex flex-col h-full max-h-[calc(100vh-180px)]">
-            <div className="flex items-center gap-2 mb-6 text-indigo-400">
-                <Zap className="w-5 h-5 fill-indigo-400" />
+        <div className="bg-black/70 backdrop-blur-xl rounded-2xl border border-white/10 p-6 shadow-2xl flex flex-col h-full max-h-[calc(100vh-180px)]">
+            <div className="flex items-center gap-2 mb-6 text-white/70">
+                <Zap className="w-5 h-5 fill-white/70" />
                 <h2 className="text-xl font-bold tracking-tight text-white">{title}</h2>
-                <span className="text-[10px] bg-slate-800 px-2 py-0.5 rounded text-slate-500 uppercase font-bold ml-auto">
+                <span className="text-[10px] bg-white/5 px-2 py-0.5 rounded text-white/60 uppercase font-bold ml-auto">
                     {count} row{count !== 1 ? 's' : ''}
                 </span>
             </div>
@@ -74,10 +74,10 @@ const ArbitrageMatrix = ({ tickers, botConfig, snapshotOpportunities, snapshotLa
             <div className="overflow-y-auto pr-2 custom-scrollbar flex-1">
                 <table className="w-full text-left border-collapse">
                     <thead>
-                        <tr className="border-b border-slate-800 text-slate-400 text-sm font-medium">
-                            <th className="pb-4 px-4">Symbol</th>
-                            <th className="pb-4 px-4">Best Long</th>
-                            <th className="pb-4 px-4">Best Short</th>
+                        <tr className="border-b border-white/10 text-white/60 text-sm font-medium">
+                            <th className="pb-4 px-4 text-white/70">Symbol</th>
+                            <th className="pb-4 px-4 text-white/70">Best Long</th>
+                            <th className="pb-4 px-4 text-white/70">Best Short</th>
                             <th className="pb-4 px-4 text-right cursor-pointer select-none group/sort" onClick={handleSortToggle}>
                                 <div className="flex items-center justify-end gap-1 group-hover:text-white transition-colors">
                                     Spread %
