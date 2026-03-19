@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { Client } from '@stomp/stompjs';
 
 // Bigger batch => fewer React updates and less frontend CPU.
-const TICKER_BATCH_MS = 1200;
+const TICKER_BATCH_MS = 1800;
 const isDev = typeof import.meta !== 'undefined' && import.meta.env?.DEV;
 
 export const useRabbitMQ = () => {
@@ -16,6 +16,23 @@ export const useRabbitMQ = () => {
   const authCallbacksRef = useRef({});
   const tickerBatchRef = useRef({});
   const batchTimerRef = useRef(null);
+  const exchangeSubsRef = useRef(new Map()); // exName -> stomp subscription
+
+  const flushTickerBatch = () => {
+    const batch = tickerBatchRef.current;
+    if (!batch || Object.keys(batch).length === 0) return;
+    tickerBatchRef.current = {};
+    setTickers((prev) => ({ ...prev, ...batch }));
+  };
+
+  const onTickerMessage = (message) => {
+    const ticker = JSON.parse(message.body);
+    const key = `${ticker.exchange}-${ticker.symbol}`;
+    tickerBatchRef.current[key] = ticker;
+    if (!batchTimerRef.current) {
+      batchTimerRef.current = setInterval(flushTickerBatch, TICKER_BATCH_MS);
+    }
+  };
 
   const sendBotCommand = (command) => {
     if (clientRef.current && isConnected) {
@@ -72,9 +89,9 @@ export const useRabbitMQ = () => {
     });
   };
 
-  // Keep tickers in state for a short window; cleanup run periodically.
-  // Shorter retention reduces state size + compute in opportunities table.
-  const TICKER_RETAIN_MS = 2 * 60 * 1000;
+  // Keep tickers in state close to opportunities freshness window.
+  // (dashboard opportunity logic uses FRESH_MS=90s)
+  const TICKER_RETAIN_MS = 95 * 1000;
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now();
@@ -122,29 +139,15 @@ export const useRabbitMQ = () => {
       },
     });
 
-    const flushTickerBatch = () => {
-      const batch = tickerBatchRef.current;
-      if (Object.keys(batch).length === 0) return;
-      tickerBatchRef.current = {};
-      setTickers((prev) => ({ ...prev, ...batch }));
-    };
-
     client.onConnect = () => {
       if (isDev) console.log('Connected to WebStomp');
       setIsConnected(true);
 
-      const onTickerMessage = (message) => {
-        const ticker = JSON.parse(message.body);
-        const key = `${ticker.exchange}-${ticker.symbol}`;
-        tickerBatchRef.current[key] = ticker;
-        if (!batchTimerRef.current) {
-          batchTimerRef.current = setInterval(flushTickerBatch, TICKER_BATCH_MS);
-        }
-      };
-
       // Subscribe only to explicit exchange topics to avoid duplicate streams.
+      // We may later unsubscribe those disabled in bot.config.
       ['Binance', 'Bybit', 'Bitget', 'MEXC', 'Bitmart', 'Kraken', 'Gate'].forEach((ex) => {
-        client.subscribe(`/exchange/arbit_hub/ticker.${ex}`, onTickerMessage);
+        const sub = client.subscribe(`/exchange/arbit_hub/ticker.${ex}`, onTickerMessage);
+        exchangeSubsRef.current.set(ex, sub);
       });
 
       client.subscribe('/exchange/arbit_hub/account.state', (message) => {
@@ -198,6 +201,41 @@ export const useRabbitMQ = () => {
       client.deactivate();
     };
   }, []);
+
+  // Reduce stream volume further: unsubscribe from exchanges that bot disables.
+  useEffect(() => {
+    if (!isConnected) return;
+    const enabledEx = botConfig?.enabled_exchanges;
+    if (!enabledEx || typeof enabledEx !== 'object') return;
+
+    const enabledSet = new Set(
+      Object.entries(enabledEx)
+        .filter(([, v]) => v !== false)
+        .map(([k]) => String(k).toLowerCase())
+    );
+
+    const known = ['Binance', 'Bybit', 'Bitget', 'MEXC', 'Bitmart', 'Kraken', 'Gate'];
+    const client = clientRef.current;
+    if (!client) return;
+
+    known.forEach((ex) => {
+      const exKey = ex.toLowerCase();
+      const currentlySubbed = exchangeSubsRef.current.has(ex);
+      const shouldBeSubbed = enabledSet.has(exKey);
+
+      if (shouldBeSubbed && !currentlySubbed) {
+        const sub = client.subscribe(`/exchange/arbit_hub/ticker.${ex}`, onTickerMessage);
+        exchangeSubsRef.current.set(ex, sub);
+        return;
+      }
+
+      if (!shouldBeSubbed && currentlySubbed) {
+        const sub = exchangeSubsRef.current.get(ex);
+        if (sub && typeof sub.unsubscribe === 'function') sub.unsubscribe();
+        exchangeSubsRef.current.delete(ex);
+      }
+    });
+  }, [botConfig, isConnected]);
 
   return {
     tickers,
