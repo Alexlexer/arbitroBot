@@ -164,6 +164,8 @@ pub enum BotCommand {
     UpdateSpread { threshold: Decimal },
     /// Update target depth in quote currency (USDT) for VWAP/liquidity evaluation.
     UpdateDepth { depth_usdt: Decimal },
+    /// Update Listener WS URL (e.g. ws://host:8083/ws). Empty string disables listener.
+    UpdateListenerWsUrl { url: String },
     ToggleExchange { exchange: ExchangeId, enabled: bool },
     UpdateApiKeys { exchange: ExchangeId, credentials: ApiCredentials },
     /// Dashboard login: bot validates username + password, publishes to dashboard.auth
@@ -179,6 +181,36 @@ pub struct HistoryOpportunity {
     pub long_exchange: String,
     pub long_price: f64,
     pub short_exchange: String,
+    pub short_price: f64,
+    pub spread: f64,
+}
+
+/// Incoming message from Listener WS (`type: "alert"`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListenerAlert {
+    pub symbol: String,
+    pub exchange: String,
+    pub kind: String,
+    pub source: String,
+    pub reason: String,
+    pub at: i64,
+    #[serde(default)]
+    pub mcap_usd: Option<f64>,
+}
+
+/// One computed row to show on the dashboard for a Listener-triggered symbol.
+/// Field names are camelCase because the dashboard matrix row expects:
+/// `longExchange`, `longPrice`, `shortExchange`, `shortPrice`, `spread`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListenerOpportunityPayload {
+    pub symbol: String,
+    #[serde(rename = "longExchange")]
+    pub long_exchange: String,
+    #[serde(rename = "longPrice")]
+    pub long_price: f64,
+    #[serde(rename = "shortExchange")]
+    pub short_exchange: String,
+    #[serde(rename = "shortPrice")]
     pub short_price: f64,
     pub spread: f64,
 }

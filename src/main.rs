@@ -13,12 +13,13 @@ mod rate_limiter;
 mod rebalance_advisor;
 mod config;
 mod messaging;
+mod listener;
 
 use aggregator::Aggregator;
 use execution::ExecutionActor;
-use model::{UnifiedTicker, HistoryOpportunity};
+use model::{UnifiedTicker, HistoryOpportunity, ListenerAlert};
 use rate_limiter::RateLimiter;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use std::sync::{Arc, Mutex};
 use std::path::Path;
 
@@ -35,6 +36,20 @@ async fn main() {
 
     // Load Configuration
     let config = Arc::new(Mutex::new(config::AppConfig::load()));
+
+    // Listener integration (optional; can be configured from dashboard via BotCommand)
+    let initial_listener_url = config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .listener_ws_url
+        .clone()
+        .unwrap_or_default();
+    let (listener_url_tx, listener_url_rx) = watch::channel::<String>(initial_listener_url);
+    let (listener_alert_tx, listener_alert_rx) = mpsc::channel::<ListenerAlert>(64);
+
+    tokio::spawn(async move {
+        listener::run_listener_client(listener_url_rx, listener_alert_tx).await;
+    });
 
     // Initialize Messaging (RabbitMQ)
     let messaging = messaging::init_messaging().await;
@@ -126,6 +141,22 @@ async fn main() {
 
     // Run Aggregator (Main Thread)
     let account_state = poller_handle.account_state.clone();
-    let mut aggregator = Aggregator::new(rx, cmd_rx, exec_tx, log_buffer, risk_manager, rebalance_advisor, funding_rates, market_filters, account_state, notifier, messaging, config, snapshot_tx_for_agg);
+    let mut aggregator = Aggregator::new(
+        rx,
+        cmd_rx,
+        exec_tx,
+        log_buffer,
+        risk_manager,
+        rebalance_advisor,
+        funding_rates,
+        market_filters,
+        account_state,
+        notifier,
+        messaging,
+        listener_alert_rx,
+        listener_url_tx,
+        config,
+        snapshot_tx_for_agg,
+    );
     aggregator.run().await;
 }

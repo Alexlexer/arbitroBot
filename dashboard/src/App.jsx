@@ -6,14 +6,15 @@ import BotConfig from './components/BotConfig';
 import HistoryView from './components/HistoryView';
 import Settings from './components/Settings';
 import Login from './components/Login';
-import { LayoutDashboard, Settings as SettingsIcon, Zap, ShieldCheck, LogOut, Activity, History } from 'lucide-react';
+import ListenerWatch from './components/ListenerWatch';
+import { LayoutDashboard, Settings as SettingsIcon, Zap, ShieldCheck, LogOut, Activity, History, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const AUTH_KEY = 'arbitro_dashboard_auth';
 const USERNAME_KEY = 'arbitro_dashboard_username';
 
 function App() {
-  const { tickers, accountState, botConfig, isConnected, sendBotCommand, login, register } = useRabbitMQ();
+  const { tickers, accountState, botConfig, listenerAlert, listenerOpportunity, isConnected, sendBotCommand, login, register } = useRabbitMQ();
   const [activeTab, setActiveTab] = useState('dashboard');
   const [dashboardMode, setDashboardMode] = useState('live'); // 'live' | 'history'
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -81,6 +82,17 @@ function App() {
               >
                 <LayoutDashboard className="w-4 h-4" />
                 Dashboard
+              </button>
+              <button
+                onClick={() => { setActiveTab('listener'); }}
+                className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                  activeTab === 'listener'
+                    ? 'bg-indigo-600/10 text-indigo-300 border border-indigo-500/30'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+                }`}
+              >
+                <AlertTriangle className="w-4 h-4" />
+                Listener
               </button>
               {activeTab === 'dashboard' && (
                 <>
@@ -171,15 +183,30 @@ function App() {
               )}
             </motion.div>
           ) : (
-            <motion.div
-              key="settings"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 20 }}
-              transition={{ duration: 0.2 }}
-            >
-              <Settings />
-            </motion.div>
+            <>
+              {activeTab === 'listener' ? (
+                <motion.div
+                  key="listener"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 20 }}
+                  transition={{ duration: 0.2 }}
+                  className="max-w-[700px]"
+                >
+                  <ListenerWatch alert={listenerAlert} opportunity={listenerOpportunity} />
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="settings"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 20 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <Settings />
+                </motion.div>
+              )}
+            </>
           )}
         </AnimatePresence>
       </main>

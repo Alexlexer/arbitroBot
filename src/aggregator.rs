@@ -3,7 +3,10 @@ use crate::constants::{
     target_volume_usdt, transfer_fee_usdt, max_slippage_for_safe_volume,
 };
 use crate::auth;
-use crate::model::{ExchangeId, UnifiedTicker, ArbitrageOpportunity, FundingInfo, AssetStatus, DashboardAuthResponse, HistoryOpportunity};
+use crate::model::{
+    ExchangeId, UnifiedTicker, ArbitrageOpportunity, FundingInfo, AssetStatus,
+    DashboardAuthResponse, HistoryOpportunity, ListenerAlert, ListenerOpportunityPayload,
+};
 use crate::risk_manager::RiskManager;
 use crate::notifier::TelegramNotifier;
 use log::{info, error};
@@ -12,6 +15,7 @@ use std::str::FromStr;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::watch;
 
 pub struct Aggregator {
     rx: Receiver<UnifiedTicker>,
@@ -27,6 +31,10 @@ pub struct Aggregator {
     last_rebalance_notified: Arc<Mutex<Option<Vec<crate::model::RebalanceAdvice>>>>,
     /// (symbol, long_ex, short_ex) -> last_alert_ts_ms (cooldown to avoid spam)
     last_opportunity_alert: Arc<Mutex<HashMap<String, i64>>>,
+    /// Forwarded from Listener WS client (type="alert")
+    listener_alert_rx: Receiver<ListenerAlert>,
+    /// Updated from BotConfig so Listener WS client can reconnect
+    listener_url_tx: watch::Sender<String>,
     notifier: Arc<TelegramNotifier>,
     messaging: crate::messaging::SharedMessaging,
     // Symbol -> Exchange -> Ticker
@@ -55,6 +63,8 @@ impl Aggregator {
         account_state: Arc<Mutex<crate::model::GlobalAccountState>>,
         notifier: Arc<TelegramNotifier>,
         messaging: crate::messaging::SharedMessaging,
+        listener_alert_rx: Receiver<ListenerAlert>,
+        listener_url_tx: watch::Sender<String>,
         config: Arc<Mutex<crate::config::AppConfig>>,
         snapshot_tx: Option<Sender<Vec<HistoryOpportunity>>>,
     ) -> Self {
@@ -79,6 +89,8 @@ impl Aggregator {
             feed_log_ticks: 0,
             snapshot_tx,
             snapshot_ticks: 0,
+            listener_alert_rx,
+            listener_url_tx,
         }
     }
 
@@ -98,6 +110,9 @@ impl Aggregator {
             tokio::select! {
                 Some(ticker) = self.rx.recv() => {
                     self.update_market_data(ticker).await;
+                }
+                Some(alert) = self.listener_alert_rx.recv() => {
+                    self.handle_listener_alert(alert).await;
                 }
                 Some(cmd) = self.command_rx.recv() => {
                     self.handle_command(cmd).await;
@@ -141,6 +156,77 @@ impl Aggregator {
         }
     }
 
+    async fn handle_listener_alert(&mut self, alert: ListenerAlert) {
+        // Always broadcast raw alert so UI can show it immediately.
+        self.broadcast_message("listener.alert", &alert).await;
+
+        // Only handle futures listings for now (based on Listener "kind").
+        if alert.kind.to_lowercase() != "futures" {
+            return;
+        }
+
+        let symbol_norm = crate::model::normalize_symbol(&alert.symbol);
+        let Some(exchanges) = self.market_data.get(&symbol_norm) else {
+            return;
+        };
+        if exchanges.len() < 2 {
+            return;
+        }
+
+        let best_long = exchanges
+            .values()
+            .min_by(|a, b| {
+                a.best_ask()
+                    .map(|x| x.0)
+                    .unwrap_or(Decimal::MAX)
+                    .partial_cmp(&b.best_ask().map(|x| x.0).unwrap_or(Decimal::MAX))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap();
+
+        let best_short = exchanges
+            .values()
+            .max_by(|a, b| {
+                a.best_bid()
+                    .map(|x| x.0)
+                    .unwrap_or(Decimal::MIN)
+                    .partial_cmp(&b.best_bid().map(|x| x.0).unwrap_or(Decimal::MIN))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap();
+
+        if best_long.exchange == best_short.exchange {
+            return;
+        }
+
+        let Some(b_long) = best_long.best_ask() else { return; };
+        let Some(b_short) = best_short.best_bid() else { return; };
+
+        let floor = Decimal::from_str("0.00000001").unwrap();
+        if b_long.0 <= floor || b_short.0 <= floor {
+            return;
+        }
+
+        let gross_spread = (b_short.0 - b_long.0) / b_long.0 * Decimal::from(100);
+
+        // Fee model matches detect_sharps()/current_opportunities().
+        let fee_long_total = best_long.exchange.taker_fee() * Decimal::from(2);
+        let fee_short_total = best_short.exchange.taker_fee() * Decimal::from(2);
+        let slippage_total = Decimal::new(2, 3); // 0.2%
+        let total_cost_pct = (fee_long_total + fee_short_total + slippage_total) * Decimal::from(100);
+        let net_spread = gross_spread - total_cost_pct;
+
+        let payload = ListenerOpportunityPayload {
+            symbol: symbol_norm,
+            long_exchange: format!("{:?}", best_long.exchange),
+            long_price: b_long.0.to_string().parse::<f64>().unwrap_or(0.0),
+            short_exchange: format!("{:?}", best_short.exchange),
+            short_price: b_short.0.to_string().parse::<f64>().unwrap_or(0.0),
+            spread: net_spread.to_string().parse::<f64>().unwrap_or(0.0),
+        };
+        self.broadcast_message("listener.opportunity", &payload).await;
+    }
+
     async fn handle_command(&mut self, cmd: crate::model::BotCommand) {
         use crate::model::BotCommand;
         let auth_reply = match &cmd {
@@ -162,6 +248,21 @@ impl Aggregator {
                 BotCommand::UpdateDepth { depth_usdt } => {
                     c.depth_usdt = depth_usdt;
                     info!("COMMAND: Depth (USDT) updated to {}", depth_usdt);
+                }
+                BotCommand::UpdateListenerWsUrl { url } => {
+                    let trimmed = url.trim();
+                    c.listener_ws_url = if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    };
+                    let _ = self
+                        .listener_url_tx
+                        .send(c.listener_ws_url.clone().unwrap_or_default());
+                    info!(
+                        "COMMAND: Listener WS URL updated (enabled={})",
+                        c.listener_ws_url.is_some()
+                    );
                 }
                 BotCommand::ToggleExchange { exchange, enabled } => {
                     c.enabled_exchanges.insert(exchange, enabled);

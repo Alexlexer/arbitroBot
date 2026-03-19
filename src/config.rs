@@ -21,6 +21,10 @@ pub struct AppConfig {
     /// Use VWAP-on-depth for spread; if false, best bid/ask is used (fallback for debugging).
     #[serde(default = "default_use_vwap_pricing")]
     pub use_vwap_pricing: bool,
+    /// RabbitMQ is for dashboard <-> bot. This WS is for incoming listing alerts (Listener service).
+    /// Empty / None disables Listener integration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listener_ws_url: Option<String>,
     pub enabled_exchanges: std::collections::HashMap<crate::model::ExchangeId, bool>,
     /// Never serialized to or deserialized from config.json (secrets stay in .env / memory only)
     #[serde(skip_serializing, skip_deserializing, default)]
@@ -58,6 +62,7 @@ impl AppConfig {
              // Sensible starting depth; can be changed from dashboard.
             depth_usdt: Decimal::from(50),
             use_vwap_pricing: true,
+            listener_ws_url: None,
             enabled_exchanges,
             api_keys: std::collections::HashMap::new(),
         }

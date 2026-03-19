@@ -1,8 +1,13 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Settings, CheckCircle2, Circle } from 'lucide-react';
 
 const BotConfig = ({ config, onCommand }) => {
   if (!config) return null;
+
+  const [listenerWsUrlDraft, setListenerWsUrlDraft] = useState(config.listener_ws_url || '');
+  useEffect(() => {
+    setListenerWsUrlDraft(config.listener_ws_url || '');
+  }, [config.listener_ws_url]);
 
   const handleToggle = (exchange) => {
     onCommand({
@@ -86,6 +91,32 @@ const BotConfig = ({ config, onCommand }) => {
           />
           <p className="mt-1 text-[10px] text-slate-500">
             Диапазон 100 – 5000 USDT. VWAP-диагностика и оценка ликвидности.
+          </p>
+        </div>
+
+        {/* Exchanges Toggle */}
+        {/* Listener WS URL */}
+        <div>
+          <label className="text-[10px] font-bold uppercase text-slate-500 mb-2 block">
+            Listener WS URL (alerts)
+          </label>
+          <input
+            type="text"
+            value={listenerWsUrlDraft}
+            onChange={(e) => setListenerWsUrlDraft(e.target.value)}
+            placeholder="ws://listener-host:8083/ws"
+            className="w-full px-4 py-3 bg-slate-800/80 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/50"
+          />
+          <div className="flex items-center gap-3 mt-3">
+            <button
+              onClick={() => onCommand({ type: 'update_listener_ws_url', url: listenerWsUrlDraft })}
+              className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-sm font-semibold text-white transition-colors"
+            >
+              Set Listener URL
+            </button>
+          </div>
+          <p className="mt-2 text-[10px] text-slate-500">
+            Leave empty to disable listener integration.
           </p>
         </div>
 

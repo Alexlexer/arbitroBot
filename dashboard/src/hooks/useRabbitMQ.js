@@ -8,6 +8,8 @@ export const useRabbitMQ = () => {
   const [tickers, setTickers] = useState({});
   const [accountState, setAccountState] = useState(null);
   const [botConfig, setBotConfig] = useState(null);
+  const [listenerAlert, setListenerAlert] = useState(null);
+  const [listenerOpportunity, setListenerOpportunity] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
   const clientRef = useRef(null);
   const authCallbacksRef = useRef({});
@@ -143,6 +145,14 @@ export const useRabbitMQ = () => {
         setBotConfig(JSON.parse(message.body));
       });
 
+      client.subscribe('/exchange/arbit_hub/listener.alert', (message) => {
+        setListenerAlert(JSON.parse(message.body));
+      });
+
+      client.subscribe('/exchange/arbit_hub/listener.opportunity', (message) => {
+        setListenerOpportunity(JSON.parse(message.body));
+      });
+
       // Subscribe to dashboard auth replies
       client.subscribe('/exchange/arbit_hub/dashboard.auth', (message) => {
         const body = JSON.parse(message.body);
@@ -175,5 +185,15 @@ export const useRabbitMQ = () => {
     };
   }, []);
 
-  return { tickers, accountState, botConfig, isConnected, sendBotCommand, login, register };
+  return {
+    tickers,
+    accountState,
+    botConfig,
+    listenerAlert,
+    listenerOpportunity,
+    isConnected,
+    sendBotCommand,
+    login,
+    register,
+  };
 };
