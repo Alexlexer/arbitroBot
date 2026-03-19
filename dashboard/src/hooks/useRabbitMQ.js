@@ -1,7 +1,8 @@
 import { useEffect, useState, useRef } from 'react';
 import { Client } from '@stomp/stompjs';
 
-const TICKER_BATCH_MS = 500;
+// Bigger batch => fewer React updates and less frontend CPU.
+const TICKER_BATCH_MS = 1200;
 const isDev = typeof import.meta !== 'undefined' && import.meta.env?.DEV;
 
 export const useRabbitMQ = () => {
@@ -71,8 +72,9 @@ export const useRabbitMQ = () => {
     });
   };
 
-  // Keep tickers in state for 5 minutes; cleanup run every 30s
-  const TICKER_RETAIN_MS = 5 * 60 * 1000;
+  // Keep tickers in state for a short window; cleanup run periodically.
+  // Shorter retention reduces state size + compute in opportunities table.
+  const TICKER_RETAIN_MS = 2 * 60 * 1000;
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now();
@@ -105,8 +107,8 @@ export const useRabbitMQ = () => {
         login: 'guest',
         passcode: 'guest',
       },
-      // Keep debug enabled in production to diagnose websocket/STOMP issues.
-      debug: (str) => console.log('STOMP:', str),
+      // Avoid heavy console spam in production; keep only error logs.
+      debug: isDev ? (str) => console.log('STOMP:', str) : () => {},
       reconnectDelay: 5000,
       heartbeatIncoming: 4000,
       heartbeatOutgoing: 4000,
@@ -140,8 +142,7 @@ export const useRabbitMQ = () => {
         }
       };
 
-      client.subscribe('/exchange/arbit_hub/ticker.*', onTickerMessage);
-      // Explicit subscriptions so every exchange is received (ticker.* can miss some in STOMP)
+      // Subscribe only to explicit exchange topics to avoid duplicate streams.
       ['Binance', 'Bybit', 'Bitget', 'MEXC', 'Bitmart', 'Kraken', 'Gate'].forEach((ex) => {
         client.subscribe(`/exchange/arbit_hub/ticker.${ex}`, onTickerMessage);
       });
