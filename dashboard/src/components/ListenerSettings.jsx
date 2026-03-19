@@ -2,10 +2,21 @@ import React, { useEffect, useState } from 'react';
 
 export default function ListenerSettings({ config, onCommand }) {
   const [listenerWsUrlDraft, setListenerWsUrlDraft] = useState('');
+  const [status, setStatus] = useState('idle'); // 'idle' | 'sending' | 'set' | 'disabled'
 
   useEffect(() => {
     setListenerWsUrlDraft(config?.listener_ws_url || '');
+    // If we already have the server-side value, treat it as set.
+    if (config?.listener_ws_url) setStatus('set');
+    else setStatus('disabled');
   }, [config?.listener_ws_url]);
+
+  const trimmedDraft = listenerWsUrlDraft.trim();
+
+  const handleSet = () => {
+    setStatus('sending');
+    onCommand({ type: 'update_listener_ws_url', url: listenerWsUrlDraft });
+  };
 
   return (
     <div className="bg-black/70 border border-white/10 rounded-2xl p-6">
@@ -32,11 +43,18 @@ export default function ListenerSettings({ config, onCommand }) {
 
       <div className="flex items-center gap-3 mt-3">
         <button
-          onClick={() => onCommand({ type: 'update_listener_ws_url', url: listenerWsUrlDraft })}
+          onClick={handleSet}
           className="flex-1 py-2.5 bg-white text-black hover:bg-white/90 rounded-xl text-sm font-semibold transition-colors"
         >
           Set URL
         </button>
+      </div>
+
+      <div className="mt-2 text-[10px] text-white/50">
+        {status === 'sending' && 'Setting URL...'}
+        {status === 'set' && 'Listener WS URL saved.'}
+        {status === 'disabled' && 'Listener disabled (empty URL).'}
+        {status === 'idle' && trimmedDraft ? 'Ready.' : 'Waiting for URL...'}
       </div>
 
       <div className="mt-2 text-[10px] text-white/50">
