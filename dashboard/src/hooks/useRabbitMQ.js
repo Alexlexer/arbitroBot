@@ -115,9 +115,11 @@ export const useRabbitMQ = () => {
     // Direct RabbitMQ Web STOMP port (15674). For remote access ensure port 15674 is open on the server.
     const envUrl = typeof import.meta !== 'undefined' && import.meta.env?.VITE_RABBITMQ_WS_URL;
     const hostname = typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1';
+    const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+    const scheme = isHttps ? 'wss' : 'ws';
     const brokerURL = (envUrl && envUrl.trim())
       ? envUrl.trim()
-      : `ws://${hostname}:15674/ws`;
+      : `${scheme}://${hostname}:15674/ws`;
     const client = new Client({
       brokerURL,
       connectHeaders: {
