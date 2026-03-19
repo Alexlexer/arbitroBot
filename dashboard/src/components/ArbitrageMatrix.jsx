@@ -12,13 +12,29 @@ const formatPrice = (price) => {
 
 /** Row: live { symbol, bestLong, bestShort, spread } or snapshot { symbol, longExchange, longPrice, shortExchange, shortPrice, spread }. Memoized to avoid re-renders. */
 const Row = React.memo(({ item }) => {
-    const isSnapshot = 'longExchange' in item;
+    // History API returns snake_case fields (long_exchange/long_price),
+    // while listener/live snapshots may use camelCase (longExchange/longPrice).
+    const isSnapshot = ('longExchange' in item) || ('long_exchange' in item);
     const symbol = item.symbol;
     const spread = item.spread;
-    const longLabel = isSnapshot ? item.longExchange : item.bestLong.exchange;
-    const longPrice = isSnapshot ? item.longPrice : parseFloat(item.bestLong.asks[0][0]);
-    const shortLabel = isSnapshot ? item.shortExchange : item.bestShort.exchange;
-    const shortPrice = isSnapshot ? item.shortPrice : parseFloat(item.bestShort.bids[0][0]);
+    const longLabel = isSnapshot
+        ? (item.longExchange ?? item.long_exchange)
+        : item?.bestLong?.exchange;
+    const longPrice = isSnapshot
+        ? (item.longPrice ?? item.long_price ?? 0)
+        : (() => {
+            const p = item?.bestLong?.asks?.[0]?.[0];
+            return p != null ? parseFloat(p) : 0;
+          })();
+    const shortLabel = isSnapshot
+        ? (item.shortExchange ?? item.short_exchange)
+        : item?.bestShort?.exchange;
+    const shortPrice = isSnapshot
+        ? (item.shortPrice ?? item.short_price ?? 0)
+        : (() => {
+            const p = item?.bestShort?.bids?.[0]?.[0];
+            return p != null ? parseFloat(p) : 0;
+          })();
 
     return (
         <tr className="border-b border-white/10 hover:bg-white/5 transition-colors group">
