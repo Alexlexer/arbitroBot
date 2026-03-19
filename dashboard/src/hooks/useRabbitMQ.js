@@ -105,10 +105,19 @@ export const useRabbitMQ = () => {
         login: 'guest',
         passcode: 'guest',
       },
-      debug: isDev ? (str) => console.log('STOMP:', str) : () => {},
+      // Keep debug enabled in production to diagnose websocket/STOMP issues.
+      debug: (str) => console.log('STOMP:', str),
       reconnectDelay: 5000,
       heartbeatIncoming: 4000,
       heartbeatOutgoing: 4000,
+      onWebSocketOpen: () => {
+        console.log('WebSocket opened:', brokerURL);
+      },
+      onWebSocketClose: (evt) => {
+        const code = evt?.code;
+        const reason = evt?.reason;
+        console.error('WebSocket closed:', { code, reason, url: brokerURL });
+      },
     });
 
     const flushTickerBatch = () => {
@@ -171,7 +180,11 @@ export const useRabbitMQ = () => {
     };
 
     client.onWebSocketError = (event) => {
-      console.error('WebSocket Error', event);
+      console.error('WebSocket Error', {
+        url: event?.target?.url,
+        readyState: event?.target?.readyState,
+        eventType: event?.type,
+      });
     };
 
     client.activate();
