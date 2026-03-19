@@ -7,6 +7,7 @@ import HistoryView from './components/HistoryView';
 import Settings from './components/Settings';
 import Login from './components/Login';
 import ListenerWatch from './components/ListenerWatch';
+import ListenerSettings from './components/ListenerSettings';
 import { LayoutDashboard, Settings as SettingsIcon, Zap, ShieldCheck, LogOut, Activity, History, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -191,9 +192,12 @@ function App() {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: 20 }}
                   transition={{ duration: 0.2 }}
-                  className="max-w-[700px]"
+                  className="max-w-[900px]"
                 >
-                  <ListenerWatch alert={listenerAlert} opportunity={listenerOpportunity} />
+                  <div className="space-y-4">
+                    <ListenerSettings config={botConfig} onCommand={sendBotCommand} />
+                    <ListenerWatch alert={listenerAlert} opportunity={listenerOpportunity} />
+                  </div>
                 </motion.div>
               ) : (
                 <motion.div
