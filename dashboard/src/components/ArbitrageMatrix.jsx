@@ -14,9 +14,11 @@ const formatPrice = (price) => {
 const Row = React.memo(({ item }) => {
     // History API returns snake_case fields (long_exchange/long_price),
     // while listener/live snapshots may use camelCase (longExchange/longPrice).
+    if (!item) return null;
+
     const isSnapshot = ('longExchange' in item) || ('long_exchange' in item);
-    const symbol = item.symbol;
-    const spread = item.spread;
+    const symbol = item.symbol ?? '';
+    const spread = typeof item.spread === 'number' ? item.spread : (item.spread != null ? parseFloat(item.spread) : 0) || 0;
     const longLabel = isSnapshot
         ? (item.longExchange ?? item.long_exchange)
         : item?.bestLong?.exchange;
