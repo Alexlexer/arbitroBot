@@ -28,5 +28,17 @@ pub fn max_slippage_for_safe_volume() -> Decimal {
 /// Max lag (ms) for ticker timestamps in risk validation (must match TICKER_STALE_MS so opportunities aren't rejected after passing aggregator)
 pub const RISK_MAX_TICKER_LAG_MS: i64 = TICKER_STALE_MS;
 
-/// Min interval (ms) between Telegram alerts for the same symbol+pair - avoid spam
+/// Default cooldown (ms) between Telegram alerts for the same symbol+pair.
+/// Use `adaptive_cooldown_ms()` for spread-scaled cooldowns.
 pub const OPPORTUNITY_ALERT_COOLDOWN_MS: i64 = 60_000;
+
+/// Spread-aware cooldown: hotter opportunities get shorter cooldowns.
+pub fn adaptive_cooldown_ms(spread_pct: Decimal) -> i64 {
+    if spread_pct >= Decimal::from(3) {
+        10_000
+    } else if spread_pct >= Decimal::from(1) {
+        30_000
+    } else {
+        OPPORTUNITY_ALERT_COOLDOWN_MS
+    }
+}

@@ -80,6 +80,10 @@ impl ExchangeId {
             ExchangeId::Okx => Decimal::new(5, 4),     // 0.05%
         }
     }
+
+    pub fn effective_taker_fee(&self, overrides: &HashMap<ExchangeId, Decimal>) -> Decimal {
+        overrides.get(self).copied().unwrap_or_else(|| self.taker_fee())
+    }
 }
 
 impl fmt::Display for ExchangeId {
@@ -168,6 +172,8 @@ pub enum BotCommand {
     UpdateListenerWsUrl { url: String },
     ToggleExchange { exchange: ExchangeId, enabled: bool },
     UpdateApiKeys { exchange: ExchangeId, credentials: ApiCredentials },
+    /// Update per-exchange taker fee override (decimal, e.g. 0.0004)
+    UpdateFees { exchange: ExchangeId, fee: Decimal },
     /// Dashboard login: bot validates username + password, publishes to dashboard.auth
     DashboardLogin { username: String, password: String, request_id: String },
     /// Dashboard register: requires invite_code, then creates user
@@ -223,6 +229,31 @@ pub struct DashboardAuthResponse {
     pub username: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TradeRecord {
+    pub id: String,
+    pub symbol: String,
+    pub long_exchange: ExchangeId,
+    pub short_exchange: ExchangeId,
+    pub long_price: Decimal,
+    pub short_price: Decimal,
+    pub volume_usdt: Decimal,
+    pub spread_pct: Decimal,
+    pub long_status: TradeStatus,
+    pub short_status: TradeStatus,
+    pub realized_pnl_usdt: Option<Decimal>,
+    pub timestamp: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum TradeStatus {
+    Pending,
+    Filled,
+    PartialFill,
+    Failed(String),
+    Reversed,
 }
 
 pub fn normalize_symbol(s: &str) -> String {

@@ -6,6 +6,10 @@ fn default_use_vwap_pricing() -> bool {
     true
 }
 
+fn default_max_position_pct() -> Decimal {
+    Decimal::new(5, 2) // 0.05 = 5% of total equity per trade
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub margin_threshold_low: Decimal,    // 0.4 (40%)
@@ -25,6 +29,13 @@ pub struct AppConfig {
     /// Empty / None disables Listener integration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listener_ws_url: Option<String>,
+    /// Per-exchange taker fee overrides (decimal, e.g. 0.0004 = 0.04%).
+    /// If absent for an exchange, the compiled-in default is used.
+    #[serde(default)]
+    pub taker_fee_overrides: std::collections::HashMap<crate::model::ExchangeId, Decimal>,
+    /// Max fraction of total equity risked per single trade (e.g. 0.05 = 5%).
+    #[serde(default = "default_max_position_pct")]
+    pub max_position_pct: Decimal,
     pub enabled_exchanges: std::collections::HashMap<crate::model::ExchangeId, bool>,
     /// Never serialized to or deserialized from config.json (secrets stay in .env / memory only)
     #[serde(skip_serializing, skip_deserializing, default)]
@@ -63,6 +74,8 @@ impl AppConfig {
             depth_usdt: Decimal::from(50),
             use_vwap_pricing: true,
             listener_ws_url: None,
+            taker_fee_overrides: std::collections::HashMap::new(),
+            max_position_pct: default_max_position_pct(),
             enabled_exchanges,
             api_keys: std::collections::HashMap::new(),
         }

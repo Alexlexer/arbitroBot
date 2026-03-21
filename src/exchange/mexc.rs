@@ -1,27 +1,36 @@
-use async_trait::async_trait;
-use crate::exchange::Exchange;
+use super::Exchange;
 use crate::model::{ExchangeId, UnifiedTicker};
+use async_trait::async_trait;
+use futures_util::{SinkExt, StreamExt};
+use log::{error, info};
 use rust_decimal::Decimal;
-use tokio::sync::mpsc::Sender;
-use log::{info, error};
+use serde_json::json;
 use std::str::FromStr;
+use tokio::sync::mpsc::Sender;
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use url::Url;
 
 pub struct MexcLauncher;
 
 const MEXC_DEPTH_SYMBOLS_LIMIT: usize = 120;
-const MEXC_DEPTH_DELAY_MS: u64 = 200;
-const MEXC_CYCLE_SLEEP_SECS: u64 = 2;
-const MEXC_FUTURES_BASE: &str = "https://api.mexc.com/api/v1/contract";
+const MEXC_WS_URL: &str = "wss://contract.mexc.com/edge";
+const MEXC_FUTURES_BASE: &str = "https://contract.mexc.com/api/v1/contract";
+const MEXC_SUB_BATCH_SIZE: usize = 20;
+const MEXC_PING_INTERVAL_SECS: u64 = 20;
 
 #[async_trait]
 impl Exchange for MexcLauncher {
-    async fn connect(&mut self, tx: Sender<UnifiedTicker>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        info!("Connecting to MEXC Futures Market Data (REST depth)...");
-
-        let client = reqwest::Client::new();
+    async fn connect(
+        &mut self,
+        tx: Sender<UnifiedTicker>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let tx_clone = tx.clone();
 
         tokio::spawn(async move {
+            let url = Url::parse(MEXC_WS_URL).expect("Invalid MEXC WebSocket URL");
+            let mut reconnect_attempt: u32 = 0;
+
+            let client = reqwest::Client::new();
             let symbols = match fetch_mexc_futures_contracts(&client).await {
                 Ok(s) => s,
                 Err(e) => {
@@ -29,36 +38,111 @@ impl Exchange for MexcLauncher {
                     vec![]
                 }
             };
-            let symbols: Vec<String> = symbols.into_iter().take(MEXC_DEPTH_SYMBOLS_LIMIT).collect();
-            info!("MEXC: polling futures depth (limit 5) for {} contracts", symbols.len());
+            let symbols: Vec<String> = symbols
+                .into_iter()
+                .take(MEXC_DEPTH_SYMBOLS_LIMIT)
+                .collect();
+            info!(
+                "MEXC: subscribing to depth.full for {} contracts via WebSocket",
+                symbols.len()
+            );
 
             loop {
-                for sym in &symbols {
-                    match fetch_mexc_futures_depth(&client, sym).await {
-                        Ok(Some(ticker)) => {
-                            if tx_clone.send(ticker).await.is_err() {
-                                error!("MEXC: channel closed");
-                                return;
+                info!("Connecting to MEXC Contract WebSocket...");
+                match connect_async(url.clone()).await {
+                    Ok((ws_stream, _)) => {
+                        reconnect_attempt = 0;
+                        info!("Connected to MEXC Contract WebSocket.");
+                        let (mut write, mut read) = ws_stream.split();
+
+                        for chunk in symbols.chunks(MEXC_SUB_BATCH_SIZE) {
+                            for sym in chunk {
+                                let sub_msg = json!({
+                                    "method": "sub.depth.full",
+                                    "param": { "symbol": sym, "limit": 5 }
+                                });
+                                if let Err(e) =
+                                    write.send(Message::Text(sub_msg.to_string())).await
+                                {
+                                    error!("MEXC: failed to subscribe {}: {}", sym, e);
+                                    break;
+                                }
+                            }
+                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                        }
+
+                        let mut write_ping = write;
+                        tokio::spawn(async move {
+                            loop {
+                                tokio::time::sleep(tokio::time::Duration::from_secs(
+                                    MEXC_PING_INTERVAL_SECS,
+                                ))
+                                .await;
+                                let ping = json!({"method": "ping"});
+                                if write_ping
+                                    .send(Message::Text(ping.to_string()))
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                        });
+
+                        while let Some(msg) = read.next().await {
+                            if let Ok(Message::Text(text)) = msg {
+                                if let Ok(raw) =
+                                    serde_json::from_str::<serde_json::Value>(&text)
+                                {
+                                    let channel =
+                                        raw.get("channel").and_then(|c| c.as_str()).unwrap_or("");
+
+                                    if channel == "pong"
+                                        || channel == "rs.sub.depth.full"
+                                        || raw.get("channel").is_none()
+                                    {
+                                        continue;
+                                    }
+
+                                    if channel != "push.depth.full" {
+                                        continue;
+                                    }
+
+                                    if let Some(ticker) = parse_mexc_depth_push(&raw) {
+                                        if tx_clone.send(ticker).await.is_err() {
+                                            error!("MEXC: channel closed");
+                                            return;
+                                        }
+                                    }
+                                }
                             }
                         }
-                        Ok(None) => {}
-                        Err(e) => error!("MEXC futures depth {}: {}", sym, e),
                     }
-                    tokio::time::sleep(tokio::time::Duration::from_millis(MEXC_DEPTH_DELAY_MS)).await;
+                    Err(e) => {
+                        error!("MEXC connection error: {}", e);
+                        reconnect_attempt += 1;
+                    }
                 }
-                tokio::time::sleep(tokio::time::Duration::from_secs(MEXC_CYCLE_SLEEP_SECS)).await;
+                let delay = super::reconnect_delay_secs(reconnect_attempt);
+                info!("MEXC: reconnecting in {}s...", delay);
+                tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
             }
         });
 
         Ok(())
     }
 
-    async fn subscribe(&mut self, _symbols: &[String]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn subscribe(
+        &mut self,
+        _symbols: &[String],
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Ok(())
     }
 }
 
-async fn fetch_mexc_futures_contracts(client: &reqwest::Client) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+async fn fetch_mexc_futures_contracts(
+    client: &reqwest::Client,
+) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
     let url = format!("{}/detail", MEXC_FUTURES_BASE);
     let json: serde_json::Value = client.get(&url).send().await?.json().await?;
     let data = json.get("data").ok_or("missing data")?;
@@ -85,65 +169,62 @@ async fn fetch_mexc_futures_contracts(client: &reqwest::Client) -> Result<Vec<St
     Ok(symbols)
 }
 
-fn parse_depth_level(arr: &serde_json::Value) -> Option<(Decimal, Decimal)> {
-    let a = arr.as_array()?;
-    let price = match a.get(0) {
-        Some(serde_json::Value::Number(n)) => Decimal::from_str(&n.to_string()).ok()?,
-        Some(serde_json::Value::String(s)) => Decimal::from_str(s).ok()?,
-        _ => return None,
-    };
-    let size = match a.get(1) {
-        Some(serde_json::Value::Number(n)) => Decimal::from_str(&n.to_string()).ok()?,
-        Some(serde_json::Value::String(s)) => Decimal::from_str(s).ok()?,
-        _ => return None,
-    };
-    if price > Decimal::ZERO && size > Decimal::ZERO {
-        Some((price, size))
-    } else {
-        None
+fn mexc_value_to_decimal(v: &serde_json::Value) -> Option<Decimal> {
+    if let Some(n) = v.as_f64() {
+        return Decimal::from_str(&n.to_string()).ok();
     }
+    if let Some(s) = v.as_str() {
+        return Decimal::from_str(s).ok();
+    }
+    if let Some(n) = v.as_i64() {
+        return Some(Decimal::from(n));
+    }
+    None
 }
 
-async fn fetch_mexc_futures_depth(client: &reqwest::Client, symbol: &str) -> Result<Option<UnifiedTicker>, Box<dyn std::error::Error + Send + Sync>> {
-    let url = format!("{}/depth/{}?limit=5", MEXC_FUTURES_BASE, symbol);
-    let resp = client.get(&url).send().await?;
-    let json: serde_json::Value = resp.json().await?;
-    if json.get("success").and_then(|v| v.as_bool()) == Some(false) {
-        return Ok(None);
-    }
-    let empty: Vec<serde_json::Value> = vec![];
-    let (bids_raw, asks_raw) = if let Some(data) = json.get("data").and_then(|d| d.as_object()) {
-        (
-            data.get("bids").and_then(|b| b.as_array()).unwrap_or(&empty),
-            data.get("asks").and_then(|a| a.as_array()).unwrap_or(&empty),
-        )
-    } else {
-        (
-            json.get("bids").and_then(|b| b.as_array()).unwrap_or(&empty),
-            json.get("asks").and_then(|a| a.as_array()).unwrap_or(&empty),
-        )
-    };
+fn parse_mexc_depth_push(raw: &serde_json::Value) -> Option<UnifiedTicker> {
+    let symbol = raw.get("symbol").and_then(|s| s.as_str())?;
+    let data = raw.get("data")?;
+    let ts = raw.get("ts").and_then(|t| t.as_i64()).unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+
+    let bids_raw = data.get("bids").and_then(|b| b.as_array())?;
+    let asks_raw = data.get("asks").and_then(|a| a.as_array())?;
 
     let mut bids_vec: Vec<(Decimal, Decimal)> = Vec::with_capacity(bids_raw.len());
-    for b in bids_raw {
-        if let Some(pq) = parse_depth_level(b) {
-            bids_vec.push(pq);
+    for b in bids_raw.iter().take(5) {
+        if let Some(arr) = b.as_array() {
+            if arr.len() >= 2 {
+                if let (Some(p), Some(q)) = (mexc_value_to_decimal(&arr[0]), mexc_value_to_decimal(&arr[1])) {
+                    if p > Decimal::ZERO && q > Decimal::ZERO {
+                        bids_vec.push((p, q));
+                    }
+                }
+            }
         }
     }
+
     let mut asks_vec: Vec<(Decimal, Decimal)> = Vec::with_capacity(asks_raw.len());
-    for a in asks_raw {
-        if let Some(pq) = parse_depth_level(a) {
-            asks_vec.push(pq);
+    for a in asks_raw.iter().take(5) {
+        if let Some(arr) = a.as_array() {
+            if arr.len() >= 2 {
+                if let (Some(p), Some(q)) = (mexc_value_to_decimal(&arr[0]), mexc_value_to_decimal(&arr[1])) {
+                    if p > Decimal::ZERO && q > Decimal::ZERO {
+                        asks_vec.push((p, q));
+                    }
+                }
+            }
         }
     }
+
     if bids_vec.is_empty() || asks_vec.is_empty() {
-        return Ok(None);
+        return None;
     }
-    Ok(Some(UnifiedTicker {
+
+    Some(UnifiedTicker {
         symbol: crate::model::normalize_symbol(symbol),
         exchange: ExchangeId::MEXC,
-        timestamp: chrono::Utc::now().timestamp_millis(),
+        timestamp: ts,
         bids: bids_vec,
         asks: asks_vec,
-    }))
+    })
 }

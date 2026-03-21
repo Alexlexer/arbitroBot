@@ -1,6 +1,7 @@
 use crate::constants::{
-    TICKER_STALE_MS, OPPORTUNITY_ALERT_COOLDOWN_MS,
+    TICKER_STALE_MS,
     target_volume_usdt, transfer_fee_usdt, max_slippage_for_safe_volume,
+    adaptive_cooldown_ms,
 };
 use crate::auth;
 use crate::model::{
@@ -157,21 +158,32 @@ impl Aggregator {
     }
 
     async fn handle_listener_alert(&mut self, alert: ListenerAlert) {
-        // Always broadcast raw alert so UI can show it immediately.
         self.broadcast_message("listener.alert", &alert).await;
 
-        // Only handle futures listings for now (based on Listener "kind").
         if alert.kind.to_lowercase() != "futures" {
             return;
         }
 
         let symbol_norm = crate::model::normalize_symbol(&alert.symbol);
+
+        // Dynamic subscription: if symbol not in market data, attempt REST fetch
+        if !self.market_data.contains_key(&symbol_norm) {
+            info!("LISTENER: New symbol {} not in market data — triggering quick REST scan", symbol_norm);
+            self.quick_fetch_symbol(&symbol_norm).await;
+        }
+
         let Some(exchanges) = self.market_data.get(&symbol_norm) else {
+            info!("LISTENER: Still no data for {} after quick fetch", symbol_norm);
             return;
         };
         if exchanges.len() < 2 {
             return;
         }
+
+        let fee_overrides = {
+            let c = self.config.lock().unwrap_or_else(|e| e.into_inner());
+            c.taker_fee_overrides.clone()
+        };
 
         let best_long = exchanges
             .values()
@@ -209,10 +221,9 @@ impl Aggregator {
 
         let gross_spread = (b_short.0 - b_long.0) / b_long.0 * Decimal::from(100);
 
-        // Fee model matches detect_sharps()/current_opportunities().
-        let fee_long_total = best_long.exchange.taker_fee() * Decimal::from(2);
-        let fee_short_total = best_short.exchange.taker_fee() * Decimal::from(2);
-        let slippage_total = Decimal::new(2, 3); // 0.2%
+        let fee_long_total = best_long.exchange.effective_taker_fee(&fee_overrides) * Decimal::from(2);
+        let fee_short_total = best_short.exchange.effective_taker_fee(&fee_overrides) * Decimal::from(2);
+        let slippage_total = Decimal::new(2, 3);
         let total_cost_pct = (fee_long_total + fee_short_total + slippage_total) * Decimal::from(100);
         let net_spread = gross_spread - total_cost_pct;
 
@@ -225,6 +236,97 @@ impl Aggregator {
             spread: net_spread.to_string().parse::<f64>().unwrap_or(0.0),
         };
         self.broadcast_message("listener.opportunity", &payload).await;
+    }
+
+    /// Quick REST fetch for a specific symbol across major exchanges (for Listener dynamic subscription).
+    async fn quick_fetch_symbol(&mut self, symbol: &str) {
+        let client = reqwest::Client::new();
+        let binance_sym = format!("{}USDT", symbol);
+        let bybit_sym = format!("{}USDT", symbol);
+        let bitget_sym = format!("{}USDT", symbol);
+
+        let (b_res, by_res, bg_res) = tokio::join!(
+            Self::fetch_depth_binance(&client, &binance_sym),
+            Self::fetch_depth_bybit(&client, &bybit_sym),
+            Self::fetch_depth_bitget(&client, &bitget_sym),
+        );
+
+        let mut injected = 0u32;
+        for result in [b_res, by_res, bg_res] {
+            if let Ok(Some(ticker)) = result {
+                let entry = self.market_data.entry(ticker.symbol.clone()).or_insert_with(HashMap::new);
+                entry.insert(ticker.exchange, ticker);
+                injected += 1;
+            }
+        }
+        if injected > 0 {
+            info!("LISTENER: Injected {} exchange snapshots for {}", injected, symbol);
+        }
+    }
+
+    async fn fetch_depth_binance(client: &reqwest::Client, symbol: &str) -> Result<Option<UnifiedTicker>, Box<dyn std::error::Error + Send + Sync>> {
+        let url = format!("https://fapi.binance.com/fapi/v1/depth?symbol={}&limit=5", symbol);
+        let resp = client.get(&url).send().await?;
+        let json: serde_json::Value = resp.json().await?;
+        Self::parse_standard_depth(&json, symbol, ExchangeId::Binance)
+    }
+
+    async fn fetch_depth_bybit(client: &reqwest::Client, symbol: &str) -> Result<Option<UnifiedTicker>, Box<dyn std::error::Error + Send + Sync>> {
+        let url = format!("https://api.bybit.com/v5/market/orderbook?category=linear&symbol={}&limit=5", symbol);
+        let resp = client.get(&url).send().await?;
+        let json: serde_json::Value = resp.json().await?;
+        let result = json.get("result").cloned().unwrap_or(serde_json::Value::Null);
+        Self::parse_standard_depth(&result, symbol, ExchangeId::Bybit)
+    }
+
+    async fn fetch_depth_bitget(client: &reqwest::Client, symbol: &str) -> Result<Option<UnifiedTicker>, Box<dyn std::error::Error + Send + Sync>> {
+        let url = format!("https://api.bitget.com/api/v2/mix/market/depth?symbol={}&productType=USDT-FUTURES&limit=5", symbol);
+        let resp = client.get(&url).send().await?;
+        let json: serde_json::Value = resp.json().await?;
+        let data = json.get("data").cloned().unwrap_or(serde_json::Value::Null);
+        Self::parse_standard_depth(&data, symbol, ExchangeId::Bitget)
+    }
+
+    fn parse_standard_depth(json: &serde_json::Value, symbol: &str, exchange: ExchangeId) -> Result<Option<UnifiedTicker>, Box<dyn std::error::Error + Send + Sync>> {
+        let empty = vec![];
+        let bids_raw = json.get("bids").and_then(|b| b.as_array()).unwrap_or(&empty);
+        let asks_raw = json.get("asks").and_then(|a| a.as_array()).unwrap_or(&empty);
+        let mut bids = Vec::new();
+        let mut asks = Vec::new();
+        for b in bids_raw.iter().take(5) {
+            if let Some(arr) = b.as_array() {
+                if arr.len() >= 2 {
+                    if let (Ok(p), Ok(q)) = (
+                        Decimal::from_str(arr[0].as_str().unwrap_or("")),
+                        Decimal::from_str(arr[1].as_str().unwrap_or("")),
+                    ) {
+                        if p > Decimal::ZERO && q > Decimal::ZERO { bids.push((p, q)); }
+                    }
+                }
+            }
+        }
+        for a in asks_raw.iter().take(5) {
+            if let Some(arr) = a.as_array() {
+                if arr.len() >= 2 {
+                    if let (Ok(p), Ok(q)) = (
+                        Decimal::from_str(arr[0].as_str().unwrap_or("")),
+                        Decimal::from_str(arr[1].as_str().unwrap_or("")),
+                    ) {
+                        if p > Decimal::ZERO && q > Decimal::ZERO { asks.push((p, q)); }
+                    }
+                }
+            }
+        }
+        if bids.is_empty() || asks.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(UnifiedTicker {
+            symbol: crate::model::normalize_symbol(symbol),
+            exchange,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            bids,
+            asks,
+        }))
     }
 
     async fn handle_command(&mut self, cmd: crate::model::BotCommand) {
@@ -277,6 +379,10 @@ impl Aggregator {
                     );
                     c.api_keys.insert(exchange, credentials);
                     info!("COMMAND: API Keys updated for {}", exchange);
+                }
+                BotCommand::UpdateFees { exchange, fee } => {
+                    c.taker_fee_overrides.insert(exchange, fee);
+                    info!("COMMAND: Fee override for {} set to {}", exchange, fee);
                 }
                 BotCommand::DashboardLogin { .. } | BotCommand::DashboardRegister { .. } => {}
             }
@@ -401,25 +507,26 @@ impl Aggregator {
                     }
 
                     let gross_spread = (b_short.0 - b_long.0) / b_long.0 * Decimal::from(100);
-                    
-                    let fee_long_total = long.exchange.taker_fee() * Decimal::from(2); // Open + Close
-                    let fee_short_total = short.exchange.taker_fee() * Decimal::from(2); // Open + Close
-                    let slippage_total = Decimal::new(2, 3); // 0.2% total buffer (0.1% entry + 0.1% exit)
 
-                    let total_cost_pct = (fee_long_total + fee_short_total + slippage_total) * Decimal::from(100);
-                    let net_spread = gross_spread - total_cost_pct;
-
-                    // Optional VWAP-based pricing and diagnostics
-                    let (depth_usdt, use_vwap_pricing, threshold, is_long_enabled, is_short_enabled) = {
+                    let (depth_usdt, use_vwap_pricing, threshold, is_long_enabled, is_short_enabled, fee_overrides, max_pos_pct) = {
                         let c = self.config.lock().unwrap_or_else(|e| e.into_inner());
                         (
                             c.depth_usdt,
                             c.use_vwap_pricing,
                             c.min_spread_threshold,
                             c.enabled_exchanges.get(&long.exchange).cloned().unwrap_or(true),
-                            c.enabled_exchanges.get(&short.exchange).cloned().unwrap_or(true)
+                            c.enabled_exchanges.get(&short.exchange).cloned().unwrap_or(true),
+                            c.taker_fee_overrides.clone(),
+                            c.max_position_pct,
                         )
                     };
+
+                    let fee_long_total = long.exchange.effective_taker_fee(&fee_overrides) * Decimal::from(2);
+                    let fee_short_total = short.exchange.effective_taker_fee(&fee_overrides) * Decimal::from(2);
+                    let slippage_total = Decimal::new(2, 3); // 0.2% total buffer
+
+                    let total_cost_pct = (fee_long_total + fee_short_total + slippage_total) * Decimal::from(100);
+                    let net_spread = gross_spread - total_cost_pct;
                     let max_sanity = Decimal::from(100); // 100% max
                     let mut effective_long_price = b_long.0;
                     let mut effective_short_price = b_short.0;
@@ -493,14 +600,23 @@ impl Aggregator {
                             _timestamp: chrono::Utc::now().timestamp_millis(),
                         };
 
-                        // Dynamic position size: cap by order book depth (slippage budget)
+                        // Dynamic position size: cap by order book depth and equity fraction
                         let default_volume = target_volume_usdt();
                         let safe_volume = self.risk_manager.max_safe_volume_usdt(
                             &opp_for_risk,
                             &depth_map,
                             max_slippage_for_safe_volume(),
                         ).unwrap_or(default_volume);
-                        let target_volume = safe_volume.min(default_volume);
+                        let total_equity = {
+                            let acct = self.account_state.lock().unwrap_or_else(|e| e.into_inner());
+                            acct.total_equity_usdt
+                        };
+                        let equity_cap = if total_equity > Decimal::ZERO && max_pos_pct > Decimal::ZERO {
+                            total_equity * max_pos_pct
+                        } else {
+                            default_volume
+                        };
+                        let target_volume = safe_volume.min(default_volume).min(equity_cap);
 
                         // Require expected profit (after spread) to exceed transfer/fee buffer
                         let expected_profit_usdt = target_volume * (effective_net_spread / Decimal::from(100));
@@ -521,10 +637,20 @@ impl Aggregator {
                             }
                         }
 
-                        // Wallet status (Mocked for now as all active)
+                        // Wallet status from poller (real data, fallback to active)
                         let mut status_map = HashMap::new();
-                        status_map.insert(long.exchange, AssetStatus { can_deposit: true, can_withdraw: true, is_active: true });
-                        status_map.insert(short.exchange, AssetStatus { can_deposit: true, can_withdraw: true, is_active: true });
+                        {
+                            let acct = self.account_state.lock().unwrap_or_else(|e| e.into_inner());
+                            for eid in &[long.exchange, short.exchange] {
+                                if let Some(exchange_statuses) = acct.asset_statuses.get(eid) {
+                                    if let Some(usdt_status) = exchange_statuses.get("USDT") {
+                                        status_map.insert(*eid, usdt_status.clone());
+                                        continue;
+                                    }
+                                }
+                                status_map.insert(*eid, AssetStatus { can_deposit: true, can_withdraw: true, is_active: true });
+                            }
+                        }
 
                         let r_filters = self.market_filters.lock().unwrap_or_else(|e| e.into_inner());
                         
@@ -537,12 +663,13 @@ impl Aggregator {
                         // Validate Risk
                         let risk_result = self.risk_manager.validate(&opp_for_risk, &depth_map, &funding_map, &status_map, &r_filters, &ticker_timestamps, &account_state, target_volume).await;
 
-                        // Cooldown: don't spam the same symbol+pair (e.g. 1 alert per minute per opportunity)
+                        // Adaptive cooldown: hotter spreads get shorter cooldowns
                         let alert_key = format!("{}_{:?}_{:?}", symbol, long.exchange, short.exchange);
+                        let cooldown = adaptive_cooldown_ms(effective_net_spread);
                         let should_send = {
                             let mut last = self.last_opportunity_alert.lock().unwrap_or_else(|e| e.into_inner());
                             let last_ts = last.get(&alert_key).copied().unwrap_or(0);
-                            if now - last_ts >= OPPORTUNITY_ALERT_COOLDOWN_MS {
+                            if now - last_ts >= cooldown {
                                 last.insert(alert_key.clone(), now);
                                 true
                             } else {
@@ -587,6 +714,10 @@ impl Aggregator {
 
     /// Build current opportunities (same logic as matrix), sorted by net spread desc, limited.
     fn current_opportunities(&self, limit: usize) -> Vec<(String, ExchangeId, Decimal, ExchangeId, Decimal, Decimal, Decimal)> {
+        let fee_overrides = {
+            let c = self.config.lock().unwrap_or_else(|e| e.into_inner());
+            c.taker_fee_overrides.clone()
+        };
         let mut opportunities = Vec::new();
 
         for (symbol, exchanges) in &self.market_data {
@@ -633,9 +764,9 @@ impl Aggregator {
 
                     let gross_spread = (b_short.0 - b_long.0) / b_long.0 * Decimal::from(100);
                     
-                    let fee_long_total = long.exchange.taker_fee() * Decimal::from(2); // Open + Close
-                    let fee_short_total = short.exchange.taker_fee() * Decimal::from(2); // Open + Close
-                    let slippage_total = Decimal::new(2, 3); // 0.2% total buffer (0.1% entry + 0.1% exit)
+                    let fee_long_total = long.exchange.effective_taker_fee(&fee_overrides) * Decimal::from(2);
+                    let fee_short_total = short.exchange.effective_taker_fee(&fee_overrides) * Decimal::from(2);
+                    let slippage_total = Decimal::new(2, 3);
                     
                     let total_cost_pct = (fee_long_total + fee_short_total + slippage_total) * Decimal::from(100);
                     let net_spread = gross_spread - total_cost_pct;

@@ -3,5 +3,20 @@
   "margin_threshold_high": "0.7",
   "concentration_threshold": "0.7",
   "target_margin_ratio": "0.2",
-  "polling_interval_ms": 5000
+  "polling_interval_ms": 5000,
+  "min_spread_threshold": "5",
+  "depth_usdt": "50",
+  "use_vwap_pricing": true,
+  "taker_fee_overrides": {},
+  "max_position_pct": "0.05",
+  "enabled_exchanges": {
+    "Binance": true,
+    "Bybit": true,
+    "Bitget": true,
+    "MEXC": true,
+    "Bitmart": true,
+    "Kraken": true,
+    "Gate": true,
+    "Okx": true
+  }
 }

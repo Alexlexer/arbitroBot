@@ -25,6 +25,9 @@ services:
       - rabbitmq
     environment:
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+    volumes:
+      - ./data:/app/data
+      - ./config.json:/app/config.json
     networks:
       - arbitro
 
