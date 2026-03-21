@@ -418,10 +418,8 @@ impl Aggregator {
         let entry = self.market_data.entry(symbol.clone()).or_insert_with(HashMap::new);
         entry.insert(ticker.exchange, ticker.clone());
         
-        // Check for immediate opportunity on every update (High-Frequency style)
         self.detect_sharps(&symbol).await;
         
-        // Broadcast ticker update
         self.broadcast_message(&format!("ticker.{}", ticker.exchange), &ticker).await;
     }
 
@@ -921,8 +919,8 @@ impl Aggregator {
     }
 
     async fn broadcast_message<T: serde::Serialize>(&self, routing_key: &str, payload: &T) {
-        let msg = self.messaging.lock().await;
-        if let Some(client) = msg.as_ref() {
+        let mut msg = self.messaging.lock().await;
+        if let Some(client) = msg.as_mut() {
             if let Err(e) = client.publish(routing_key, payload).await {
                 error!("RabbitMQ Publish Error ({}): {}", routing_key, e);
             }

@@ -109,6 +109,12 @@ async fn main() {
     } else {
         log::warn!("History store disabled (could not open {}), History tab will be empty", history_db_path);
         drop(snapshot_rx);
+        let health_port: u16 = std::env::var("HISTORY_API_PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(8080);
+        tokio::spawn(async move {
+            let app = history::health_only_router();
+            let addr = std::net::SocketAddr::from(([0, 0, 0, 0], health_port));
+            let _ = axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app).await;
+        });
         None
     };
 

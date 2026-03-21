@@ -7,11 +7,12 @@ use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use log::{info, error};
+use log::{info, error, warn};
 
 pub struct RabbitMQClient {
     connection: Connection,
     channel: Channel,
+    url: String,
 }
 
 impl RabbitMQClient {
@@ -23,7 +24,6 @@ impl RabbitMQClient {
         let channel = connection.open_channel(None).await?;
         channel.register_callback(DefaultChannelCallback).await?;
 
-        // Declare main exchange
         channel.exchange_declare(
             ExchangeDeclareArguments::new("arbit_hub", "topic")
                 .durable(true)
@@ -31,13 +31,41 @@ impl RabbitMQClient {
                 .finish(),
         ).await?;
 
-        Ok(Self { connection, channel })
+        Ok(Self { connection, channel, url: url.to_string() })
     }
 
-    pub async fn publish<T: Serialize>(&self, routing_key: &str, payload: &T) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn is_open(&self) -> bool {
+        self.connection.is_open() && self.channel.is_open()
+    }
+
+    pub async fn reconnect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        warn!("RabbitMQ: attempting reconnect...");
+        let args = OpenConnectionArguments::try_from(self.url.as_str())?;
+        let connection = Connection::open(&args).await?;
+        connection.register_callback(DefaultConnectionCallback).await?;
+
+        let channel = connection.open_channel(None).await?;
+        channel.register_callback(DefaultChannelCallback).await?;
+
+        channel.exchange_declare(
+            ExchangeDeclareArguments::new("arbit_hub", "topic")
+                .durable(true)
+                .auto_delete(false)
+                .finish(),
+        ).await?;
+
+        self.connection = connection;
+        self.channel = channel;
+        info!("RabbitMQ: reconnected successfully");
+        Ok(())
+    }
+
+    pub async fn publish<T: Serialize>(&mut self, routing_key: &str, payload: &T) -> Result<(), Box<dyn std::error::Error>> {
+        if !self.is_open() {
+            self.reconnect().await?;
+        }
         let body = serde_json::to_vec(payload)?;
         let args = BasicPublishArguments::new("arbit_hub", routing_key);
-        
         self.channel.basic_publish(BasicProperties::default(), body, args).await?;
         Ok(())
     }
@@ -45,13 +73,9 @@ impl RabbitMQClient {
     pub async fn setup_command_consumer<T>(&self, queue_name: &str, routing_key: &str, tx: tokio::sync::mpsc::Sender<T>) -> Result<(), Box<dyn std::error::Error>> 
     where T: DeserializeOwned + Send + 'static
     {
-        // Declare queue
         self.channel.queue_declare(QueueDeclareArguments::new(queue_name).durable(true).finish()).await?;
-        
-        // Bind queue
         self.channel.queue_bind(QueueBindArguments::new(queue_name, "arbit_hub", routing_key)).await?;
 
-        // Start consumer
         let args = BasicConsumeArguments::new(queue_name, "bot_consumer");
         self.channel.basic_consume(CommandConsumer { tx }, args).await?;
 
@@ -82,7 +106,6 @@ where T: DeserializeOwned + Send + 'static
                 error!("Failed to parse command: {}", e);
             }
         }
-        // Ack
         let _ = channel.basic_ack(amqprs::channel::BasicAckArguments::new(deliver.delivery_tag(), false)).await;
     }
 }
@@ -93,7 +116,7 @@ pub async fn init_messaging() -> SharedMessaging {
     let url = std::env::var("RABBITMQ_URL").unwrap_or_else(|_| "amqp://guest:guest@localhost:5672/".to_string());
     
     let mut retry_count = 0;
-    let max_retries = 10;
+    let max_retries = 30;
     
     while retry_count < max_retries {
         match RabbitMQClient::new(&url).await {
@@ -103,8 +126,9 @@ pub async fn init_messaging() -> SharedMessaging {
             }
             Err(e) => {
                 retry_count += 1;
-                error!("Failed to connect to RabbitMQ (attempt {}/{}): {}. Retrying in 2s...", retry_count, max_retries, e);
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                let delay = std::cmp::min(2u64.pow(retry_count.min(5)), 30);
+                error!("Failed to connect to RabbitMQ (attempt {}/{}): {}. Retrying in {}s...", retry_count, max_retries, e, delay);
+                tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
             }
         }
     }

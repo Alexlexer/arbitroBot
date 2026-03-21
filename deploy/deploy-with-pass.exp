@@ -1,7 +1,7 @@
 #!/usr/bin/expect -f
 # Run deploy with SSH password. Usage: ./deploy-with-pass.exp [user@host] [password]
 # Or set DEPLOY_SSH_PASS and optionally DEPLOY_REMOTE.
-set timeout 120
+set timeout 600
 set remote [lindex $argv 0]
 set pass [lindex $argv 1]
 if {$remote == ""} { set remote "root@96.62.214.161" }

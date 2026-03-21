@@ -2,14 +2,25 @@ services:
   rabbitmq:
     image: rabbitmq:3-management
     container_name: rabbitmq
+    restart: unless-stopped
     ports:
       - "5672:5672"
       - "15672:15672"
       - "15674:15674"
     environment:
-      - RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS=-rabbit allow_loopback_users false
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
     command: >
       sh -c "rabbitmq-plugins enable --offline rabbitmq_web_stomp && rabbitmq-server"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./deploy/rabbitmq.conf:/etc/rabbitmq/conf.d/10-loopback.conf:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     networks:
       - arbitro
 
@@ -22,12 +33,20 @@ services:
     env_file:
       - .env
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
     environment:
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
     volumes:
       - ./data:/app/data
       - ./config.json:/app/config.json
+      - bot_users:/app/userdata
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - arbitro
 
@@ -39,9 +58,14 @@ services:
     ports:
       - "5174:80"
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
     networks:
       - arbitro
+
+volumes:
+  rabbitmq_data:
+  bot_users:
 
 networks:
   arbitro:

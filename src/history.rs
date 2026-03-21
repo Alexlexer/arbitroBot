@@ -137,9 +137,20 @@ async fn history_handler(
     }
 }
 
+async fn health_handler() -> &'static str {
+    "ok"
+}
+
 pub fn router(store: Arc<HistoryStore>) -> Router {
     Router::new()
+        .route("/health", get(health_handler))
         .route("/api/history", get(history_handler))
         .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
         .with_state(store)
+}
+
+pub fn health_only_router() -> Router {
+    Router::new()
+        .route("/health", get(health_handler))
+        .with_state(())
 }

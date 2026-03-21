@@ -10,7 +10,14 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-const USERS_FILE: &str = "users.json";
+fn users_file_path() -> String {
+    let vol_path = "userdata/users.json";
+    if std::path::Path::new("userdata").exists() || std::fs::create_dir_all("userdata").is_ok() {
+        vol_path.to_string()
+    } else {
+        "users.json".to_string()
+    }
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct UserStore {
@@ -63,8 +70,9 @@ pub fn register_user(username: &str, password: &str, invite_code: &str) -> Resul
 }
 
 fn load_store() -> UserStore {
-    if Path::new(USERS_FILE).exists() {
-        if let Ok(data) = fs::read_to_string(USERS_FILE) {
+    let path = users_file_path();
+    if Path::new(&path).exists() {
+        if let Ok(data) = fs::read_to_string(&path) {
             if let Ok(store) = serde_json::from_str(&data) {
                 return store;
             }
@@ -74,7 +82,8 @@ fn load_store() -> UserStore {
 }
 
 fn save_store(store: &UserStore) -> Result<(), String> {
+    let path = users_file_path();
     let data = serde_json::to_string_pretty(store).map_err(|e| e.to_string())?;
-    fs::write(USERS_FILE, data).map_err(|e| e.to_string())?;
+    fs::write(&path, data).map_err(|e| e.to_string())?;
     Ok(())
 }
