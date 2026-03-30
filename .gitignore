@@ -5,3 +5,4 @@
 /users.json
 /data/*
 !/data/.gitkeep
+.aider*

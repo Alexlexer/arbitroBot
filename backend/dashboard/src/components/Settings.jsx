@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { useRabbitMQ } from '../hooks/useRabbitMQ';
+import { useSignalR } from '../hooks/useSignalR';
 import { Save, Key, Shield, AlertCircle, CheckCircle2, ChevronRight, Settings as SettingsIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -16,7 +16,7 @@ const ALL_EXCHANGES = [
 ];
 
 const Settings = () => {
-  const { botConfig, sendBotCommand } = useRabbitMQ();
+  const { botConfig, sendBotCommand } = useSignalR();
   const [activeExchange, setActiveExchange] = useState('binance');
   const [formData, setFormData] = useState({
     key: '',

@@ -1,4 +1,26 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: arbitro-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: arbit_hub
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./deploy/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - arbitro
+
   rabbitmq:
     image: rabbitmq:3-management
     container_name: rabbitmq
@@ -25,22 +47,57 @@ services:
       - arbitro
 
   arbitro-bot:
-    build: .
+    build: ./bot
     container_name: arbitro-bot
     restart: unless-stopped
     ports:
       - "9180:8080"
     env_file:
-      - .env
+      - ./bot/.env
     depends_on:
       rabbitmq:
         condition: service_healthy
     environment:
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
     volumes:
-      - ./data:/app/data
-      - ./config.json:/app/config.json
+      - ./bot/data:/app/data
+      - ./bot/config.json:/app/config.json
       - bot_users:/app/userdata
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1" ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - arbitro
+
+  arbitro-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: arbitro-backend
+    restart: unless-stopped
+    ports:
+      - "5000:8080"
+    env_file:
+      - ./bot/.env
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__DefaultConnection=Host=postgres;Database=arbit_hub;Username=postgres;Password=postgres;Port=5432
+      - RabbitMq__Host=rabbitmq
+      - RabbitMq__Port=5672
+      - History__BaseUrl=http://arbitro-bot:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      arbitro-bot:
+        condition: service_healthy
+    volumes:
+      - backend_data:/app/data
     healthcheck:
       test: [ "CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1" ]
       interval: 15s
@@ -52,20 +109,22 @@ services:
 
   dashboard:
     build:
-      context: ./dashboard
+      context: ./backend/dashboard
     container_name: arbitro-dashboard
     restart: unless-stopped
     ports:
       - "5174:80"
     depends_on:
-      rabbitmq:
+      arbitro-backend:
         condition: service_healthy
     networks:
       - arbitro
 
 volumes:
+  postgres_data:
   rabbitmq_data:
   bot_users:
+  backend_data:
 
 
 networks:

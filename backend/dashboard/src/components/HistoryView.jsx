@@ -2,48 +2,55 @@ import React, { useState, useEffect } from 'react';
 import { History, Calendar, Clock, ChevronLeft } from 'lucide-react';
 import ArbitrageMatrix from './ArbitrageMatrix';
 
-const getHistoryApiBase = () => {
-  if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_HISTORY_API_URL)
-    return import.meta.env.VITE_HISTORY_API_URL;
-  const protocol = typeof window !== 'undefined' ? window.location.protocol : 'http:';
-  const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-  const port = (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) ? 8080 : 9180;
-  return `${protocol}//${host}:${port}`;
-};
-const HISTORY_API_BASE = getHistoryApiBase();
+// History is now served by the .NET backend (which proxies to the Rust Axum API).
+// In dev Vite proxies /api → http://localhost:5000, so relative URLs work everywhere.
 
 function formatDate(ts) {
-  const d = new Date(ts);
-  return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+  return new Date(ts).toLocaleDateString(undefined, {
+    weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
+  });
 }
 
 function formatTime(ts) {
-  return new Date(ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return new Date(ts).toLocaleTimeString(undefined, {
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
 }
 
 export default function HistoryView() {
-  const [snapshots, setSnapshots] = useState([]); // [{ timestamp, opportunities }, ...]
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [snapshots, setSnapshots] = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [error, setError]         = useState(null);
   const [selectedTs, setSelectedTs] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${HISTORY_API_BASE}/api/history?days=30`)
-      .then(res => res.ok ? res.json() : Promise.reject(new Error(res.statusText)))
-      .then(data => {
+    const token = localStorage.getItem('arbit_token');
+
+    fetch('/api/history?days=30', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then((res) => {
+        if (res.status === 401) throw new Error('Session expired — please sign in again');
+        if (!res.ok) throw new Error(res.statusText || `HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data) => {
         if (!cancelled && Array.isArray(data)) setSnapshots(data);
       })
-      .catch(e => {
+      .catch((e) => {
         if (!cancelled) setError(e.message || 'Failed to load history');
       })
       .finally(() => { if (!cancelled) setLoading(false); });
+
     return () => { cancelled = true; };
   }, []);
 
-  const selectedSnapshot = selectedTs != null ? snapshots.find(s => s.timestamp === selectedTs) : null;
+  const selectedSnapshot = selectedTs != null
+    ? snapshots.find((s) => s.timestamp === selectedTs)
+    : null;
 
-  // Group by date (YYYY-MM-DD)
+  // Group snapshots by day (YYYY-MM-DD), most recent first
   const byDay = snapshots.reduce((acc, s) => {
     const key = new Date(s.timestamp).toISOString().slice(0, 10);
     if (!acc[key]) acc[key] = [];
@@ -61,31 +68,35 @@ export default function HistoryView() {
       <div className="flex items-center gap-2 text-white/70 mb-4">
         <History className="w-5 h-5" />
         <h2 className="text-xl font-bold tracking-tight text-white">History</h2>
-        <span className="text-xs text-white/60">Last 30 days, backend (10GB cap)</span>
+        <span className="text-xs text-white/60">Last 30 days · bot snapshots every 5 min</span>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+        {/* Snapshot picker */}
         <div className="xl:col-span-4 space-y-4">
           <div className="bg-black/70 backdrop-blur-xl rounded-2xl border border-white/10 p-4">
             <div className="flex items-center gap-2 text-white/60 text-sm font-medium mb-3">
               <Calendar className="w-4 h-4" />
               Pick a snapshot
             </div>
+
             {error ? (
-              <p className="text-white/60 text-sm">API error: {error}. Is the bot running with history enabled?</p>
+              <p className="text-white/60 text-sm">Error: {error}</p>
             ) : loading ? (
               <p className="text-white/60 text-sm">Loading…</p>
             ) : snapshots.length === 0 ? (
-              <p className="text-white/60 text-sm">No snapshots yet. Bot saves every 5 min when running.</p>
+              <p className="text-white/60 text-sm">
+                No snapshots yet. The bot saves every 5 min when running.
+              </p>
             ) : (
-              <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
+              <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
                 {days.map(([dateKey, times]) => (
                   <div key={dateKey}>
                     <div className="text-xs font-bold text-white/60 uppercase tracking-wider mb-2">
                       {formatDate(new Date(dateKey).getTime())}
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      {times.map(ts => (
+                      {times.map((ts) => (
                         <button
                           key={ts}
                           type="button"
@@ -108,6 +119,7 @@ export default function HistoryView() {
           </div>
         </div>
 
+        {/* Snapshot detail */}
         <div className="xl:col-span-8">
           {selectedTs == null ? (
             <div className="bg-black/70 backdrop-blur-xl rounded-2xl border border-white/10 p-12 text-center">
@@ -119,11 +131,11 @@ export default function HistoryView() {
               snapshotOpportunities={selectedSnapshot.opportunities}
               snapshotLabel={snapshotLabel}
             />
-          ) : selectedTs != null ? (
+          ) : (
             <div className="bg-black/70 backdrop-blur-xl rounded-2xl border border-white/10 p-12 text-center">
               <p className="text-white/60">Loading snapshot…</p>
             </div>
-          ) : null}
+          )}
         </div>
       </div>
     </div>

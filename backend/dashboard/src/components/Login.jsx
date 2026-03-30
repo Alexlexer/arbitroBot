@@ -2,13 +2,31 @@ import React, { useState } from 'react';
 import { Zap, Lock, User, KeyRound, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-const Login = ({ onSuccess, login, register, isConnected }) => {
-  const [mode, setMode] = useState('login'); // 'login' | 'register'
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
+/**
+ * Calls the .NET backend REST auth endpoints.
+ * On success stores the JWT in localStorage and calls onSuccess(username).
+ *
+ * Props:
+ *   onSuccess(username: string) — called after successful login/register
+ */
+const Login = ({ onSuccess }) => {
+  const [mode, setMode]             = useState('login'); // 'login' | 'register'
+  const [username, setUsername]     = useState('');
+  const [password, setPassword]     = useState('');
   const [inviteCode, setInviteCode] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [error, setError]           = useState('');
+  const [loading, setLoading]       = useState(false);
+
+  const callAuth = async (endpoint, body) => {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data; // { token, username }
+  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -17,18 +35,15 @@ const Login = ({ onSuccess, login, register, isConnected }) => {
       setError('Enter username and password');
       return;
     }
-    if (!isConnected) {
-      setError('Connecting to broker… Try again in a moment.');
-      return;
-    }
     setLoading(true);
     try {
-      const res = await login(username.trim(), password);
-      if (res.ok) {
-        onSuccess(res.username || username.trim());
-      } else {
-        setError(res.error || 'Wrong username or password');
-      }
+      const { token, username: user } = await callAuth('/api/auth/login', {
+        username: username.trim(),
+        password,
+      });
+      localStorage.setItem('arbit_token', token);
+      localStorage.setItem('arbit_user', user);
+      onSuccess(user);
     } catch (err) {
       setError(err.message || 'Login failed');
     } finally {
@@ -47,23 +62,18 @@ const Login = ({ onSuccess, login, register, isConnected }) => {
       setError('Password must be at least 8 characters');
       return;
     }
-    if (!isConnected) {
-      setError('Connecting to broker… Try again in a moment.');
-      return;
-    }
     setLoading(true);
     try {
-      const res = await register(username.trim(), password, inviteCode.trim());
-      if (res.ok) {
-        onSuccess(res.username || username.trim());
-      } else {
-        setError(res.error || 'Registration failed');
-      }
+      const { token, username: user } = await callAuth('/api/auth/register', {
+        username: username.trim(),
+        password,
+        inviteCode: inviteCode.trim(),
+      });
+      localStorage.setItem('arbit_token', token);
+      localStorage.setItem('arbit_user', user);
+      onSuccess(user);
     } catch (err) {
-      const msg = err.message || 'Registration failed';
-      setError(msg === 'Registration timeout'
-        ? 'No response from bot. Ensure the bot is running and rebuilt (docker compose up --build -d), and INVITE_CODE is set in .env.'
-        : msg);
+      setError(err.message || 'Registration failed');
     } finally {
       setLoading(false);
     }
@@ -80,40 +90,45 @@ const Login = ({ onSuccess, login, register, isConnected }) => {
         className="w-full max-w-md"
       >
         <div className="bg-black/60 border border-white/10 rounded-2xl p-8 shadow-xl backdrop-blur">
+          {/* Logo */}
           <div className="flex flex-col items-center mb-8">
             <div className="w-14 h-14 bg-white/10 rounded-xl flex items-center justify-center mb-4">
               <Zap className="w-8 h-8 text-white fill-current" />
             </div>
-            <h1 className="text-2xl font-bold text-white tracking-tight">
-              Arbitro<span className="text-white">Bot</span>
-            </h1>
+            <h1 className="text-2xl font-bold text-white tracking-tight">ArbitroBot</h1>
             <p className="text-slate-400 text-sm mt-1">
               {mode === 'login' ? 'Sign in to the dashboard' : 'Create an account'}
             </p>
           </div>
 
-          {/* Tabs: Sign in | Register */}
+          {/* Mode tabs */}
           <div className="flex rounded-xl bg-slate-800/50 p-1 mb-4">
             <button
               type="button"
               onClick={() => { setMode('login'); setError(''); }}
-              className={`flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all ${mode === 'login' ? 'bg-white/10 text-white shadow' : 'text-white/60 hover:text-white hover:bg-white/5'}`}
+              className={`flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                mode === 'login'
+                  ? 'bg-white/10 text-white shadow'
+                  : 'text-white/60 hover:text-white hover:bg-white/5'
+              }`}
             >
               Sign in
             </button>
             <button
               type="button"
               onClick={() => { setMode('register'); setError(''); }}
-              className={`flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all ${mode === 'register' ? 'bg-white/10 text-white shadow' : 'text-white/60 hover:text-white hover:bg-white/5'}`}
+              className={`flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                mode === 'register'
+                  ? 'bg-white/10 text-white shadow'
+                  : 'text-white/60 hover:text-white hover:bg-white/5'
+              }`}
             >
               Register
             </button>
           </div>
-          <p className="text-center text-slate-500 text-xs mb-2">
-            {mode === 'login' ? "Don't have an account? Click Register." : 'Have an invite code? Create your account above.'}
-          </p>
 
           <form onSubmit={submit} className="space-y-5">
+            {/* Username */}
             <div>
               <label htmlFor="username" className="block text-sm font-medium text-slate-400 mb-2">
                 Username
@@ -134,6 +149,7 @@ const Login = ({ onSuccess, login, register, isConnected }) => {
               </div>
             </div>
 
+            {/* Password */}
             <div>
               <label htmlFor="password" className="block text-sm font-medium text-slate-400 mb-2">
                 Password
@@ -153,6 +169,7 @@ const Login = ({ onSuccess, login, register, isConnected }) => {
               </div>
             </div>
 
+            {/* Invite code (register only) */}
             <AnimatePresence mode="wait">
               {mode === 'register' && (
                 <motion.div
@@ -182,6 +199,7 @@ const Login = ({ onSuccess, login, register, isConnected }) => {
               )}
             </AnimatePresence>
 
+            {/* Error message */}
             {error && (
               <div className="flex items-center gap-2 text-white/60 text-sm">
                 <AlertCircle className="w-4 h-4 flex-shrink-0" />
@@ -189,21 +207,10 @@ const Login = ({ onSuccess, login, register, isConnected }) => {
               </div>
             )}
 
-            {/* Connection status bar */}
-            <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium ${
-              isConnected 
-                ? 'bg-white/5 text-white/60' 
-                : 'bg-red-900/20 text-red-300 border border-red-500/20'
-            }`}>
-              <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`} />
-              {isConnected
-                ? 'Connected to broker'
-                : 'Not connected — ensure port 15674 is open, then refresh'}
-            </div>
-
+            {/* Submit */}
             <button
               type="submit"
-              disabled={loading || !isConnected}
+              disabled={loading}
               className="w-full py-3 px-4 bg-white/10 hover:bg-white/15 disabled:bg-white/5 disabled:text-white/30 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-colors"
             >
               {loading
@@ -214,6 +221,7 @@ const Login = ({ onSuccess, login, register, isConnected }) => {
         </div>
       </motion.div>
 
+      {/* Background glows */}
       <div className="fixed inset-0 pointer-events-none -z-10 overflow-hidden">
         <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-white/5 blur-[120px] rounded-full" />
         <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-white/5 blur-[120px] rounded-full" />
