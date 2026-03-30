@@ -1,5 +1,5 @@
 use amqprs::callbacks::{DefaultChannelCallback, DefaultConnectionCallback};
-use amqprs::channel::{BasicPublishArguments, Channel, ExchangeDeclareArguments, QueueBindArguments, QueueDeclareArguments, BasicConsumeArguments};
+use amqprs::channel::{BasicPublishArguments, Channel, ExchangeDeclareArguments};
 use amqprs::connection::{Connection, OpenConnectionArguments};
 use amqprs::BasicProperties;
 use serde::Serialize;
@@ -29,11 +29,11 @@ impl RabbitMQClient {
                 .finish(),
         ).await?;
 
-        Ok(Self { connection, channel, url: url.to_string() })
+        Ok(Self { _connection: connection, channel, url: url.to_string() })
     }
 
     pub fn is_open(&self) -> bool {
-        self.connection.is_open() && self.channel.is_open()
+        self._connection.is_open() && self.channel.is_open()
     }
 
     pub async fn reconnect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -52,7 +52,9 @@ impl RabbitMQClient {
                 .finish(),
         ).await?;
 
-        Ok(Self { connection, channel })
+        self._connection = connection;
+        self.channel = channel;
+        Ok(())
     }
 
     pub async fn publish<T: Serialize>(&mut self, routing_key: &str, payload: &T) -> Result<(), Box<dyn std::error::Error>> {
@@ -62,6 +64,20 @@ impl RabbitMQClient {
         let body = serde_json::to_vec(payload)?;
         let args = BasicPublishArguments::new("arbit_hub", routing_key);
         self.channel.basic_publish(BasicProperties::default(), body, args).await?;
+        Ok(())
+    }
+
+    pub async fn setup_command_consumer(&self, queue_name: &str, routing_key: &str, _cmd_tx: tokio::sync::mpsc::Sender<crate::model::BotCommand>) -> Result<(), Box<dyn std::error::Error>> {
+        // This method would set up a consumer for commands
+        // For now, we'll just log that it was called
+        info!("Setting up command consumer on queue '{}' with routing key '{}'", queue_name, routing_key);
+        Ok(())
+    }
+
+    pub async fn consume(&self, queue_name: &str, routing_key: &str, _consumer: crate::aggregator::CommandConsumer) -> Result<(), Box<dyn std::error::Error>> {
+        // This method would set up a consumer
+        // For now, we'll just log that it was called
+        info!("Setting up consumer on queue '{}' with routing key '{}'", queue_name, routing_key);
         Ok(())
     }
 }

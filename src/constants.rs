@@ -42,3 +42,8 @@ pub fn adaptive_cooldown_ms(spread_pct: Decimal) -> i64 {
         OPPORTUNITY_ALERT_COOLDOWN_MS
     }
 }
+
+/// Maximum position size as a fraction of total equity (e.g., 0.1 = 10%)
+pub fn max_position_percentage() -> Decimal {
+    Decimal::new(1, 1) // 10%
+}

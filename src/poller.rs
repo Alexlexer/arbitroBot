@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use std::str::FromStr;
 use log::info;
+use std::env;
 
 pub struct DataPoller {
     pub funding_rates: Arc<Mutex<HashMap<ExchangeId, HashMap<String, FundingInfo>>>>,
@@ -14,10 +15,19 @@ pub struct DataPoller {
     pub config: Arc<Mutex<crate::config::AppConfig>>,
     pub secrets: Arc<Mutex<crate::config::SecretsConfig>>,
     rate_limiter: Arc<RateLimiter>,
+    client: reqwest::Client,
 }
 
 impl DataPoller {
-    pub fn new(rate_limiter: Arc<RateLimiter>) -> Self {
+    pub fn new(
+        rate_limiter: Arc<RateLimiter>,
+        config: Arc<Mutex<crate::config::AppConfig>>,
+        secrets: Arc<Mutex<crate::config::SecretsConfig>>,
+        client: reqwest::Client,
+    ) -> Self {
+        let initial_config = config.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let initial_secrets = secrets.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        
         Self {
             funding_rates: Arc::new(Mutex::new(HashMap::new())),
             market_filters: Arc::new(Mutex::new(HashMap::new())),
@@ -32,6 +42,7 @@ impl DataPoller {
             config,
             secrets,
             rate_limiter,
+            client,
         }
     }
 
@@ -242,15 +253,15 @@ impl DataPoller {
         let mut asset_statuses = HashMap::new();
 
         // Check asset status (USDT primarily)
-        if let Ok(st) = self.fetch_binance_asset_status(client).await { asset_statuses.insert(ExchangeId::Binance, st); }
-        if let Ok(st) = self.fetch_bybit_asset_status(client).await { asset_statuses.insert(ExchangeId::Bybit, st); }
-        if let Ok(st) = self.fetch_bitget_asset_status(client).await { asset_statuses.insert(ExchangeId::Bitget, st); }
-        if let Ok(st) = self.fetch_mexc_asset_status(client).await { asset_statuses.insert(ExchangeId::MEXC, st); }
-        if let Ok(st) = self.fetch_okx_asset_status(client).await { asset_statuses.insert(ExchangeId::Okx, st); }
+        if let Ok(st) = self.fetch_binance_asset_status().await { asset_statuses.insert(ExchangeId::Binance, st); }
+        if let Ok(st) = self.fetch_bybit_asset_status().await { asset_statuses.insert(ExchangeId::Bybit, st); }
+        if let Ok(st) = self.fetch_bitget_asset_status().await { asset_statuses.insert(ExchangeId::Bitget, st); }
+        if let Ok(st) = self.fetch_mexc_asset_status().await { asset_statuses.insert(ExchangeId::MEXC, st); }
+        // if let Ok(st) = self.fetch_okx_asset_status().await { asset_statuses.insert(ExchangeId::Okx, st); }
 
         // 1. Binance
         if let (Ok(key), Ok(secret)) = (env::var("BINANCE_API_KEY"), env::var("BINANCE_API_SECRET")) {
-            if let Ok(state) = self.fetch_binance_account(client, &key, &secret).await {
+            if let Ok(state) = self.fetch_binance_account(&key, &secret).await {
                 total_equity += state.total_equity;
                 total_pnl += state.positions.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
                 exchange_states.insert(ExchangeId::Binance, state);
@@ -259,7 +270,7 @@ impl DataPoller {
 
         // 2. Bybit
         if let (Ok(key), Ok(secret)) = (env::var("BYBIT_API_KEY"), env::var("BYBIT_API_SECRET")) {
-            if let Ok(state) = self.fetch_bybit_account(client, &key, &secret).await {
+            if let Ok(state) = self.fetch_bybit_account(&key, &secret).await {
                 total_equity += state.total_equity;
                 total_pnl += state.positions.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
                 exchange_states.insert(ExchangeId::Bybit, state);
@@ -268,7 +279,7 @@ impl DataPoller {
 
         // 3. Bitget
         if let (Ok(key), Ok(secret)) = (env::var("BITGET_API_KEY"), env::var("BITGET_API_SECRET")) {
-            if let Ok(state) = self.fetch_bitget_account(client, &key, &secret).await {
+            if let Ok(state) = self.fetch_bitget_account(&key, &secret).await {
                 total_equity += state.total_equity;
                 total_pnl += state.positions.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
                 exchange_states.insert(ExchangeId::Bitget, state);
@@ -277,7 +288,7 @@ impl DataPoller {
 
         // 4. MEXC
         if let (Ok(key), Ok(secret)) = (env::var("MEXC_API_KEY"), env::var("MEXC_API_SECRET")) {
-            if let Ok(state) = self.fetch_mexc_account(client, &key, &secret).await {
+            if let Ok(state) = self.fetch_mexc_account(&key, &secret).await {
                 total_equity += state.total_equity;
                 total_pnl += state.positions.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
                 exchange_states.insert(ExchangeId::MEXC, state);
@@ -286,7 +297,7 @@ impl DataPoller {
 
         // 5. OKX
         if let (Ok(key), Ok(secret), Ok(passphrase)) = (env::var("OKX_API_KEY"), env::var("OKX_API_SECRET"), env::var("OKX_API_PASSPHRASE")) {
-            if let Ok(state) = self.fetch_okx_account(client, &key, &secret, &passphrase).await {
+            if let Ok(state) = self.fetch_okx_account(&key, &secret, &passphrase).await {
                 total_equity += state.total_equity;
                 total_pnl += state.positions.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
                 exchange_states.insert(ExchangeId::Okx, state);
@@ -624,7 +635,6 @@ impl DataPoller {
             ExchangeId::Bitmart => "https://api-cloud.bitmart.com/spot/v1/symbols",
             ExchangeId::Gate => "https://api.gateio.ws/api/v4/spot/currency_pairs",
             ExchangeId::Kraken => "https://api.kraken.com/0/public/AssetPairs",
-            ExchangeId::Ourbit => "https://api.ourbit.com/api/v1/exchangeInfo",
             _ => return Ok(HashMap::new()),
         };
 
@@ -882,9 +892,10 @@ mod tests {
     #[tokio::test]
     async fn test_poller_initialization() {
         let config = Arc::new(Mutex::new(crate::config::AppConfig::default()));
+        let secrets = Arc::new(Mutex::new(crate::config::SecretsConfig::default()));
         let rate_limiter = Arc::new(RateLimiter::new());
         let client = reqwest::Client::new();
-        let poller = DataPoller::new(rate_limiter, config, client);
+        let poller = DataPoller::new(rate_limiter, config, secrets, client);
         
         let state = poller.account_state.lock().unwrap();
         assert_eq!(state.total_equity_usdt, Decimal::ZERO);

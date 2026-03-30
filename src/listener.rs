@@ -1,4 +1,4 @@
-use futures_util::{Sink, SinkExt, StreamExt};
+use futures_util::{SinkExt, StreamExt};
 use log::{error, info};
 use serde_json::Value;
 use tokio::sync::{mpsc, watch};
@@ -14,7 +14,7 @@ pub async fn run_listener_client(
     mut ws_url_rx: watch::Receiver<String>,
     alert_tx: mpsc::Sender<ListenerAlert>,
 ) {
-    let mut current_url = ws_url_rx.borrow().clone();
+    let mut current_url;
 
     loop {
         current_url = ws_url_rx.borrow().clone();
@@ -30,7 +30,9 @@ pub async fn run_listener_client(
         match connect_async(current_url.clone()).await {
             Ok((ws_stream, _)) => {
                 info!("Listener WS connected");
-                let (mut write, mut read) = ws_stream.split();
+                let (write, read) = ws_stream.split();
+                let mut write = write;
+                let mut read = read;
 
                 loop {
                     tokio::select! {
@@ -77,14 +79,11 @@ pub async fn run_listener_client(
     }
 }
 
-async fn handle_listener_text<S>(
+async fn handle_listener_text(
     text: &str,
-    write: &mut S,
+    write: &mut futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, Message>,
     alert_tx: &mpsc::Sender<ListenerAlert>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
-where
-    S: futures_util::Sink<Message> + Unpin,
-    S::Error: std::error::Error + Send + Sync + 'static,
 {
     let v: Value = serde_json::from_str(text)?;
     let msg_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");

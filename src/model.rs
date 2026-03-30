@@ -1,7 +1,7 @@
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use std::fmt;
 use std::collections::HashMap;
+use std::fmt;
 
 #[derive(Debug, Clone)]
 pub enum RiskError {
@@ -72,8 +72,8 @@ impl ExchangeId {
         match self {
             ExchangeId::Binance => Decimal::new(5, 4), // 0.0005 (0.05%)
             ExchangeId::Bybit => Decimal::new(6, 4),   // 0.0006 (0.06%)
-            ExchangeId::Bitget => Decimal::new(6, 4), // 0.06%
-            ExchangeId::MEXC => Decimal::new(1, 3),   // 0.1%
+            ExchangeId::Bitget => Decimal::new(6, 4),  // 0.06%
+            ExchangeId::MEXC => Decimal::new(1, 3),    // 0.1%
             ExchangeId::Bitmart => Decimal::new(1, 3), // 0.1%
             ExchangeId::Kraken => Decimal::new(2, 3),  // 0.2%
             ExchangeId::Gate => Decimal::new(5, 4),    // 0.05%
@@ -82,7 +82,10 @@ impl ExchangeId {
     }
 
     pub fn effective_taker_fee(&self, overrides: &HashMap<ExchangeId, Decimal>) -> Decimal {
-        overrides.get(self).copied().unwrap_or_else(|| self.taker_fee())
+        overrides
+            .get(self)
+            .copied()
+            .unwrap_or_else(|| self.taker_fee())
     }
 }
 
@@ -156,6 +159,107 @@ pub struct RebalanceAdvice {
     pub amount_usdt: Decimal, // Recommended transfer
     pub reason: String,
 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryOpportunity {
+    pub symbol: String,
+    pub long_exchange: String,
+    pub long_price: f64,
+    pub short_exchange: String,
+    pub short_price: f64,
+    pub spread: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListenerAlert {
+    pub kind: String,
+    pub symbol: String,
+    pub exchange: String,
+    pub source: String,
+    pub reason: String,
+    pub at: i64,
+    pub mcap_usd: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListenerOpportunityPayload {
+    pub symbol: String,
+    pub long_exchange: String,
+    pub long_price: f64,
+    pub short_exchange: String,
+    pub short_price: f64,
+    pub spread: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardAuthResponse {
+    pub ok: bool,
+    pub request_id: String,
+    pub username: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BotCommand {
+    UpdateSpread {
+        threshold: Decimal,
+    },
+    UpdateDepth {
+        depth_usdt: Decimal,
+    },
+    UpdateListenerWsUrl {
+        url: String,
+    },
+    ToggleExchange {
+        exchange: ExchangeId,
+        enabled: bool,
+    },
+    UpdateApiKeys {
+        exchange: ExchangeId,
+        credentials: crate::config::ExchangeCredentials,
+    },
+    UpdateFees {
+        exchange: ExchangeId,
+        fee: Decimal,
+    },
+    DashboardLogin {
+        username: String,
+        password: String,
+        request_id: String,
+    },
+    DashboardRegister {
+        username: String,
+        password: String,
+        invite_code: String,
+        request_id: String,
+    },
+    UpdateConfig(crate::config::AppConfig),
+    UpdateSecrets(crate::config::SecretsConfig),
+    EmergencyStop,
+    Resume,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TradeStatus {
+    Filled,
+    Failed(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TradeRecord {
+    pub id: String,
+    pub symbol: String,
+    pub long_exchange: ExchangeId,
+    pub short_exchange: ExchangeId,
+    pub long_price: Decimal,
+    pub short_price: Decimal,
+    pub volume_usdt: Decimal,
+    pub spread_pct: Decimal,
+    pub long_status: TradeStatus,
+    pub short_status: TradeStatus,
+    pub realized_pnl_usdt: Option<Decimal>,
+    pub timestamp: i64,
+}
+
 pub fn normalize_symbol(s: &str) -> String {
     s.to_uppercase()
         .replace("XBT", "BTC")

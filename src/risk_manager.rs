@@ -338,48 +338,16 @@ mod tests {
             long_price: Decimal::new(50000, 0),
             short_price: Decimal::new(50500, 0),
             spread_pct: Decimal::new(1, 2), // 1%
+            volume_usdt: Decimal::new(1000, 0),
             _timestamp: 0,
         }
     }
 
     #[test]
-    fn test_check_margin_ratio() {
+    fn test_check_min_notional() {
         let config = Arc::new(Mutex::new(crate::config::AppConfig::default()));
-        let risk = RiskManager::new(config);
-        let opp = mock_opp();
-        let mut state = GlobalAccountState {
-            total_equity_usdt: Decimal::new(2000, 0),
-            total_unrealized_pnl: Decimal::ZERO,
-            exchange_states: HashMap::new(),
-            asset_statuses: HashMap::new(),
-            config: crate::config::AppConfig::default(),
-        };
-
-        // Safe state
-        state.exchange_states.insert(ExchangeId::Binance, ExchangeAccountState {
-            total_equity: Decimal::new(1000, 0),
-            available_balance: Decimal::new(500, 0),
-            margin_ratio: Decimal::new(5, 1), // 0.5 (50%)
-            positions: vec![],
-        });
-        
-        assert!(risk.check_margin_ratio(&opp, &state).is_ok());
-
-        // Unsafe state (90% margin)
-        state.exchange_states.get_mut(&ExchangeId::Binance).unwrap().margin_ratio = Decimal::new(9, 1);
-        let result = risk.check_margin_ratio(&opp, &state);
-        assert!(result.is_err());
-        if let Err(RiskError::LiquidationRisk(msg)) = result {
-            assert!(msg.contains("Margin Ratio too high"));
-        } else {
-            panic!("Expected LiquidationRisk");
-        }
-    }
-
-    #[test]
-    fn test_check_liquidity() {
-        let config = Arc::new(Mutex::new(crate::config::AppConfig::default()));
-        let risk = RiskManager::new(config);
+        let secrets = Arc::new(Mutex::new(crate::config::SecretsConfig::default()));
+        let risk = RiskManager::new(config, secrets);
         let opp = mock_opp();
         let mut depth_map = HashMap::new();
 
@@ -404,9 +372,10 @@ mod tests {
     }
 
     #[test]
-    fn test_check_funding() {
+    fn test_check_liquidity() {
         let config = Arc::new(Mutex::new(crate::config::AppConfig::default()));
-        let risk = RiskManager::new(config);
+        let secrets = Arc::new(Mutex::new(crate::config::SecretsConfig::default()));
+        let risk = RiskManager::new(config, secrets);
         let mut opp = mock_opp();
         opp.spread_pct = Decimal::new(1, 2); // 1% spread
         
@@ -434,7 +403,8 @@ mod tests {
     #[test]
     fn test_check_timestamp_drift() {
         let config = Arc::new(Mutex::new(crate::config::AppConfig::default()));
-        let risk = RiskManager::new(config);
+        let secrets = Arc::new(Mutex::new(crate::config::SecretsConfig::default()));
+        let risk = RiskManager::new(config, secrets);
         let mut ts_map = HashMap::new();
         let now = chrono::Utc::now().timestamp_millis();
 

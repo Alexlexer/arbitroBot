@@ -24,16 +24,19 @@ pub struct TelegramNotifier {
 }
 
 impl TelegramNotifier {
-    pub fn new(account_state: Arc<Mutex<crate::model::GlobalAccountState>>) -> Self {
+    pub fn new(
+        account_state: Arc<Mutex<crate::model::GlobalAccountState>>,
+        config: Arc<Mutex<crate::config::AppConfig>>,
+        secrets: Arc<Mutex<crate::config::SecretsConfig>>,
+    ) -> Self {
         let token = env::var("TELEGRAM_BOT_TOKEN").unwrap_or_default();
         let chat_id = env::var("TELEGRAM_CHAT_ID").unwrap_or_default();
         let password = env::var("BOT_PASSWORD").unwrap_or_else(|_| "admin123".to_string());
-        let enabled = !token.is_empty();
 
         if token.is_empty() {
             info!("Telegram Notifications are DISABLED (Missing Token)");
         } else if chat_id.is_empty() {
-             info!("Telegram BOT TOKEN found, but CHAT_ID is missing. Use /login to authenticate.");
+            info!("Telegram BOT TOKEN found, but CHAT_ID is missing. Use /login to authenticate.");
         }
 
         Self {
@@ -271,7 +274,7 @@ impl TelegramNotifier {
 
         if text.starts_with("/login") {
             if self.password.is_empty() {
-                self.send_to_chat(chat_id, "❌ *Login disabled.* Set BOT_PASSWORD in .env first.").await;
+                self.send_to_chat(chat_id, "❌ *Login disabled.* Set BOT_PASSWORD in .env first.", None).await;
                 return;
             }
             let parts: Vec<&str> = text.split_whitespace().collect();

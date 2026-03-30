@@ -1,7 +1,7 @@
 use crate::constants::{
     TICKER_STALE_MS,
     target_volume_usdt, transfer_fee_usdt, max_slippage_for_safe_volume,
-    adaptive_cooldown_ms,
+    max_position_percentage,
 };
 use crate::auth;
 use crate::model::{
@@ -16,6 +16,9 @@ use std::str::FromStr;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::watch;
+use async_trait::async_trait;
+use amqprs::{Deliver, BasicProperties, channel::BasicAckArguments, consumer::AsyncConsumer};
 
 pub struct Aggregator {
     rx: Receiver<UnifiedTicker>,
@@ -36,7 +39,7 @@ pub struct Aggregator {
     /// Updated from BotConfig so Listener WS client can reconnect
     listener_url_tx: watch::Sender<String>,
     notifier: Arc<TelegramNotifier>,
-    messaging: crate::messaging::SharedMessaging,
+    pub messaging: crate::messaging::SharedMessaging,
     // Symbol -> Exchange -> Ticker
     market_data: HashMap<String, HashMap<ExchangeId, UnifiedTicker>>,
     config: Arc<Mutex<crate::config::AppConfig>>,
@@ -63,6 +66,7 @@ impl Aggregator {
         account_state: Arc<Mutex<crate::model::GlobalAccountState>>,
         notifier: Arc<TelegramNotifier>,
         messaging: crate::messaging::SharedMessaging,
+
         listener_alert_rx: Receiver<ListenerAlert>,
         listener_url_tx: watch::Sender<String>,
         config: Arc<Mutex<crate::config::AppConfig>>,
@@ -391,6 +395,20 @@ impl Aggregator {
                     info!("COMMAND: Fee override for {} set to {}", exchange, fee);
                 }
                 BotCommand::DashboardLogin { .. } | BotCommand::DashboardRegister { .. } => {}
+                BotCommand::UpdateConfig(config) => {
+                    *c = config;
+                    info!("COMMAND: Full config updated");
+                }
+                BotCommand::UpdateSecrets(_secrets) => {
+                    // This would need to update the secrets in the secrets config
+                    info!("COMMAND: Secrets update received (not implemented)");
+                }
+                BotCommand::EmergencyStop => {
+                    info!("COMMAND: Emergency stop received");
+                }
+                BotCommand::Resume => {
+                    info!("COMMAND: Resume received");
+                }
             }
             if auth_reply.is_none() {
                 let _ = c.save();
@@ -462,7 +480,7 @@ impl Aggregator {
                 let take_qty = remaining / *price;
                 notional += *price * take_qty;
                 filled_qty += take_qty;
-                remaining = Decimal::ZERO;
+                // remaining = Decimal::ZERO; // Assignment not needed since we break
                 break;
             } else {
                 notional += level_usdt;
@@ -516,6 +534,10 @@ impl Aggregator {
                     let fee_short = short.exchange.taker_fee();
                     let slippage = Decimal::new(1, 3); // 0.1% buffer
 
+                    let fee_long_total = fee_long * Decimal::from(2);
+                    let fee_short_total = fee_short * Decimal::from(2);
+                    let slippage_total = slippage * Decimal::from(2);
+
                     let total_cost_pct = (fee_long_total + fee_short_total + slippage_total) * Decimal::from(100);
                     let net_spread = gross_spread - total_cost_pct;
 
@@ -525,7 +547,7 @@ impl Aggregator {
                     
                     if net_spread >= threshold && net_spread < max_sanity {
                         // Prepare Risk Data
-                        let target_volume = Decimal::from(1000); // 1000 USDT target
+                        let _target_volume = Decimal::from(1000); // 1000 USDT target
                         
                         let mut depth_map = HashMap::new();
                         depth_map.insert(long.exchange, crate::model::OrderBookDepth { bids: long.bids.clone(), asks: long.asks.clone() });
@@ -535,9 +557,9 @@ impl Aggregator {
                             symbol: symbol.to_string(),
                             long_exchange: long.exchange,
                             short_exchange: short.exchange,
-                            long_price: effective_long_price,
-                            short_price: effective_short_price,
-                            spread_pct: effective_net_spread,
+                            long_price: b_long.0,
+                            short_price: b_short.0,
+                            spread_pct: net_spread,
                             volume_usdt: Decimal::ZERO, // set when sending to execution
                             _timestamp: chrono::Utc::now().timestamp_millis(),
                         };
@@ -553,6 +575,7 @@ impl Aggregator {
                             let acct = self.account_state.lock().unwrap_or_else(|e| e.into_inner());
                             acct.total_equity_usdt
                         };
+                        let max_pos_pct = max_position_percentage();
                         let equity_cap = if total_equity > Decimal::ZERO && max_pos_pct > Decimal::ZERO {
                             total_equity * max_pos_pct
                         } else {
@@ -561,7 +584,7 @@ impl Aggregator {
                         let target_volume = safe_volume.min(default_volume).min(equity_cap);
 
                         // Require expected profit (after spread) to exceed transfer/fee buffer
-                        let expected_profit_usdt = target_volume * (effective_net_spread / Decimal::from(100));
+                        let expected_profit_usdt = target_volume * (net_spread / Decimal::from(100));
                         if expected_profit_usdt <= transfer_fee_usdt() {
                             return;
                         }
@@ -610,6 +633,7 @@ impl Aggregator {
                             long_price: b_long.0,
                             short_price: b_short.0,
                             spread_pct: net_spread,
+                            volume_usdt: target_volume,
                             _timestamp: chrono::Utc::now().timestamp_millis(),
                         }, &depth_map, &funding_map, &status_map, &r_filters, &ticker_timestamps, &account_state, target_volume).await {
                             Ok(_) => {
@@ -620,6 +644,7 @@ impl Aggregator {
                                     long_price: b_long.0,
                                     short_price: b_short.0,
                                     spread_pct: net_spread,
+                                    volume_usdt: target_volume,
                                     _timestamp: chrono::Utc::now().timestamp_millis(),
                                 };
 
@@ -652,34 +677,9 @@ impl Aggregator {
         }
     }
 
-    fn print_arbitrage_matrix(&self) {
-        use crossterm::{execute, terminal::{Clear, ClearType}, cursor::{MoveTo, Hide}};
-        use std::io::stdout;
-        use prettytable::{Table, Row, Cell, format};
 
-        let mut stdout = stdout();
-        
-        // 1. Reset Cursor to Top
-        // We use ClearType::All to ensure we wipe the slate clean every frame.
-        let _ = execute!(stdout, Hide, Clear(ClearType::All), MoveTo(0, 0));
 
-        println!("=== ARBITRAGE MATRIX (Threshold: 5.0%+) ===");
-        println!("Last Update: {}", chrono::Local::now().format("%H:%M:%S"));
-
-        // 2. Plot Equity Summary
-        if let Ok(state) = self.account_state.lock() {
-            println!("\n[ BALANCE MONITOR ]");
-            println!("Total Equity: ${:.2} USDT | Global PnL: ${:.2}", 
-                state.total_equity_usdt, state.total_unrealized_pnl);
-            
-            let mut summary = String::new();
-            for (ex, s) in &state.exchange_states {
-                summary.push_str(&format!("{}: ${:.1} ", ex, s.total_equity));
-            }
-            println!("Exchanges: {}", summary);
-            println!("--------------------------------------------------");
-        }
-
+    fn current_opportunities(&self, limit: usize) -> Vec<(String, ExchangeId, Decimal, ExchangeId, Decimal, Decimal, Decimal)> {
         let mut opportunities = Vec::new();
 
         for (symbol, exchanges) in &self.market_data {
@@ -727,6 +727,9 @@ impl Aggregator {
                     let fee_short = short.exchange.taker_fee();
                     let slippage = Decimal::new(1, 3); // 0.1% buffer
                     
+                    let fee_long_total = fee_long * Decimal::from(2);
+                    let fee_short_total = fee_short * Decimal::from(2);
+                    let slippage_total = slippage * Decimal::from(2);
                     let total_cost_pct = (fee_long_total + fee_short_total + slippage_total) * Decimal::from(100);
                     let net_spread = gross_spread - total_cost_pct;
 
@@ -899,7 +902,7 @@ impl AsyncConsumer for CommandConsumer {
                 crate::model::BotCommand::UpdateConfig(new_conf) => {
                     let mut conf = self.config.lock().unwrap();
                     *conf = new_conf;
-                    let _ = conf._save();
+                    let _ = conf.save();
                     info!("CONFIG_UPDATED: New thresholds applied.");
                 }
                 crate::model::BotCommand::UpdateSecrets(new_secrets) => {
@@ -925,6 +928,10 @@ impl AsyncConsumer for CommandConsumer {
                     tokio::spawn(async move {
                         n.send_alert("✅ *BOT RESUMED* from Dashboard. Automated rebalancing re-enabled.").await;
                     });
+                }
+                _ => {
+                    // Handle other command types if needed
+                    info!("Command type not handled in consumer: {:?}", cmd);
                 }
             }
         }

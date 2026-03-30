@@ -30,8 +30,10 @@ async fn main() {
     dotenvy::dotenv().ok();
 
     // Load Configuration
-    let config = config::AppConfig::load();
+    let initial_config = config::AppConfig::load();
     let secrets = config::SecretsConfig::load();
+    let config = Arc::new(Mutex::new(initial_config));
+    let secrets = Arc::new(Mutex::new(secrets));
 
     // Initialize Messaging (RabbitMQ)
     let messaging = messaging::init_messaging().await;
@@ -41,9 +43,6 @@ async fn main() {
     let logger = logger::BufferLogger::new(log_capacity);
     let log_buffer = logger.logs.clone(); // Clone Arc
     logger.init().expect("Failed to initialize logger");
-
-    // Load Configuration
-    let config = Arc::new(Mutex::new(config::AppConfig::load()));
 
     // Listener integration (optional; can be configured from dashboard via BotCommand)
     let initial_listener_url = config
@@ -59,25 +58,18 @@ async fn main() {
         listener::run_listener_client(listener_url_rx, listener_alert_tx).await;
     });
 
-    // Initialize Messaging (RabbitMQ)
-    let messaging = messaging::init_messaging().await;
-
     // Setup Risk, Poller, Notifier & RateLimiter
-    let config_arc = Arc::new(std::sync::Mutex::new(config.clone()));
-    let secrets_arc = Arc::new(std::sync::Mutex::new(secrets.clone()));
-    
-    let risk_manager = risk_manager::RiskManager::new(config_arc.clone(), secrets_arc.clone());
-    let rebalance_advisor = rebalance_advisor::RebalanceAdvisor::new(&config);
-    let risk_manager = risk_manager::RiskManager::new();
+    let risk_manager = risk_manager::RiskManager::new(config.clone(), secrets.clone());
     let rebalance_advisor = rebalance_advisor::RebalanceAdvisor::new(&config.lock().unwrap_or_else(|e| e.into_inner()));
     let rate_limiter = Arc::new(RateLimiter::new());
     let client = reqwest::Client::new();
-    let poller = poller::DataPoller::new(rate_limiter.clone(), config_arc.clone(), secrets_arc.clone(), client);
-    let poller = poller::DataPoller::new(rate_limiter.clone(), config.clone());
+    
+    let poller = poller::DataPoller::new(rate_limiter.clone(), config.clone(), secrets.clone(), client);
     let funding_rates = poller.funding_rates.clone();
     let market_filters = poller.market_filters.clone();
     let account_state = poller.account_state.clone();
-    let notifier = Arc::new(notifier::TelegramNotifier::new(account_state.clone(), config_arc.clone(), secrets_arc.clone()));
+    
+    let notifier = Arc::new(notifier::TelegramNotifier::new(account_state.clone(), config.clone(), secrets.clone()));
     
     // Spawn Data Pollers
     let poller_handle = Arc::new(poller);
@@ -138,7 +130,7 @@ async fn main() {
     let (cmd_tx, cmd_rx) = mpsc::channel::<crate::model::BotCommand>(10);
     let (exec_tx, exec_rx) = mpsc::channel(100);
 
-    // Setup Command Consumer
+    // Setup Command Consumer (Botmaster)
     let messaging_cmd = messaging.clone();
     tokio::spawn(async move {
         let m = messaging_cmd.lock().await;
@@ -161,18 +153,6 @@ async fn main() {
     });
 
     // Run Aggregator (Main Thread)
-    let account_state = poller_handle.account_state.clone();
-    let mut aggregator = Aggregator::new(rx, exec_tx, log_buffer, risk_manager, rebalance_advisor, funding_rates, market_filters, account_state, notifier, messaging.clone());
-    
-    // Start Command Consumer
-    {
-        let msg = messaging.lock().await;
-        if let Some(client) = msg.as_ref() {
-            let consumer = aggregator.get_command_consumer();
-            let _ = client.consume("arbit_hub_commands", "commands", consumer).await;
-        }
-    }
-
     let mut aggregator = Aggregator::new(
         rx,
         cmd_rx,
@@ -190,5 +170,15 @@ async fn main() {
         config,
         snapshot_tx_for_agg,
     );
+
+    // Setup Command Consumer (ArbitHub Internal)
+    {
+        let msg = aggregator.messaging.lock().await;
+        if let Some(client) = msg.as_ref() {
+            let consumer = aggregator.get_command_consumer();
+            let _ = client.consume("arbit_hub_commands", "commands", consumer).await;
+        }
+    }
+
     aggregator.run().await;
 }
