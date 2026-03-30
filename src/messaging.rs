@@ -1,16 +1,14 @@
 use amqprs::callbacks::{DefaultChannelCallback, DefaultConnectionCallback};
 use amqprs::channel::{BasicPublishArguments, Channel, ExchangeDeclareArguments, QueueBindArguments, QueueDeclareArguments, BasicConsumeArguments};
 use amqprs::connection::{Connection, OpenConnectionArguments};
-use amqprs::consumer::AsyncConsumer;
-use amqprs::{BasicProperties, Deliver};
-use async_trait::async_trait;
-use serde::{Serialize, de::DeserializeOwned};
+use amqprs::BasicProperties;
+use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use log::{info, error, warn};
 
 pub struct RabbitMQClient {
-    connection: Connection,
+    _connection: Connection,
     channel: Channel,
     url: String,
 }
@@ -54,10 +52,7 @@ impl RabbitMQClient {
                 .finish(),
         ).await?;
 
-        self.connection = connection;
-        self.channel = channel;
-        info!("RabbitMQ: reconnected successfully");
-        Ok(())
+        Ok(Self { connection, channel })
     }
 
     pub async fn publish<T: Serialize>(&mut self, routing_key: &str, payload: &T) -> Result<(), Box<dyn std::error::Error>> {
@@ -68,45 +63,6 @@ impl RabbitMQClient {
         let args = BasicPublishArguments::new("arbit_hub", routing_key);
         self.channel.basic_publish(BasicProperties::default(), body, args).await?;
         Ok(())
-    }
-
-    pub async fn setup_command_consumer<T>(&self, queue_name: &str, routing_key: &str, tx: tokio::sync::mpsc::Sender<T>) -> Result<(), Box<dyn std::error::Error>> 
-    where T: DeserializeOwned + Send + 'static
-    {
-        self.channel.queue_declare(QueueDeclareArguments::new(queue_name).durable(true).finish()).await?;
-        self.channel.queue_bind(QueueBindArguments::new(queue_name, "arbit_hub", routing_key)).await?;
-
-        let args = BasicConsumeArguments::new(queue_name, "bot_consumer");
-        self.channel.basic_consume(CommandConsumer { tx }, args).await?;
-
-        Ok(())
-    }
-}
-
-struct CommandConsumer<T> {
-    tx: tokio::sync::mpsc::Sender<T>,
-}
-
-#[async_trait]
-impl<T> AsyncConsumer for CommandConsumer<T> 
-where T: DeserializeOwned + Send + 'static
-{
-    async fn consume(
-        &mut self,
-        channel: &Channel,
-        deliver: Deliver,
-        _basic_properties: BasicProperties,
-        content: Vec<u8>,
-    ) {
-        match serde_json::from_slice::<T>(&content) {
-            Ok(cmd) => {
-                let _ = self.tx.send(cmd).await;
-            }
-            Err(e) => {
-                error!("Failed to parse command: {}", e);
-            }
-        }
-        let _ = channel.basic_ack(amqprs::channel::BasicAckArguments::new(deliver.delivery_tag(), false)).await;
     }
 }
 

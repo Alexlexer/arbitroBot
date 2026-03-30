@@ -127,7 +127,7 @@ export const useRabbitMQ = () => {
         passcode: 'guest',
       },
       // Avoid heavy console spam in production; keep only error logs.
-      debug: isDev ? (str) => console.log('STOMP:', str) : () => {},
+      debug: isDev ? (str) => console.log('STOMP:', str) : () => { },
       reconnectDelay: 5000,
       heartbeatIncoming: 4000,
       heartbeatOutgoing: 4000,
@@ -144,15 +144,17 @@ export const useRabbitMQ = () => {
     client.onConnect = () => {
       if (isDev) console.log('Connected to WebStomp');
       setIsConnected(true);
-
-      // Subscribe only to explicit exchange topics to avoid duplicate streams.
-      // We may later unsubscribe those disabled in bot.config.
-      ['Binance', 'Bybit', 'Bitget', 'MEXC', 'Bitmart', 'Kraken', 'Gate'].forEach((ex) => {
-        const sub = client.subscribe(`/exchange/arbit_hub/ticker.${ex}`, onTickerMessage);
-        exchangeSubsRef.current.set(ex, sub);
+      // Subscribe to all tickers
+      client.subscribe('/topic/arbit_hub.ticker.*', (message) => {
+        const ticker = JSON.parse(message.body);
+        setTickers((prev) => ({
+          ...prev,
+          [`${ticker.exchange}-${ticker.symbol}`]: ticker,
+        }));
       });
 
-      client.subscribe('/exchange/arbit_hub/account.state', (message) => {
+      // Subscribe to account state
+      client.subscribe('/topic/arbit_hub.account.state', (message) => {
         setAccountState(JSON.parse(message.body));
       });
 
@@ -204,50 +206,5 @@ export const useRabbitMQ = () => {
     };
   }, []);
 
-  // Reduce stream volume further: unsubscribe from exchanges that bot disables.
-  useEffect(() => {
-    if (!isConnected) return;
-    const enabledEx = botConfig?.enabled_exchanges;
-    if (!enabledEx || typeof enabledEx !== 'object') return;
-
-    const enabledSet = new Set(
-      Object.entries(enabledEx)
-        .filter(([, v]) => v !== false)
-        .map(([k]) => String(k).toLowerCase())
-    );
-
-    const known = ['Binance', 'Bybit', 'Bitget', 'MEXC', 'Bitmart', 'Kraken', 'Gate'];
-    const client = clientRef.current;
-    if (!client) return;
-
-    known.forEach((ex) => {
-      const exKey = ex.toLowerCase();
-      const currentlySubbed = exchangeSubsRef.current.has(ex);
-      const shouldBeSubbed = enabledSet.has(exKey);
-
-      if (shouldBeSubbed && !currentlySubbed) {
-        const sub = client.subscribe(`/exchange/arbit_hub/ticker.${ex}`, onTickerMessage);
-        exchangeSubsRef.current.set(ex, sub);
-        return;
-      }
-
-      if (!shouldBeSubbed && currentlySubbed) {
-        const sub = exchangeSubsRef.current.get(ex);
-        if (sub && typeof sub.unsubscribe === 'function') sub.unsubscribe();
-        exchangeSubsRef.current.delete(ex);
-      }
-    });
-  }, [botConfig, isConnected]);
-
-  return {
-    tickers,
-    accountState,
-    botConfig,
-    listenerAlert,
-    listenerOpportunity,
-    isConnected,
-    sendBotCommand,
-    login,
-    register,
-  };
+  return { tickers, accountState, isConnected };
 };

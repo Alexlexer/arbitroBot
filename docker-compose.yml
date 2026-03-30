@@ -16,7 +16,7 @@ services:
       - rabbitmq_data:/var/lib/rabbitmq
       - ./deploy/rabbitmq.conf:/etc/rabbitmq/conf.d/10-loopback.conf:ro
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      test: [ "CMD", "rabbitmq-diagnostics", "-q", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -42,7 +42,7 @@ services:
       - ./config.json:/app/config.json
       - bot_users:/app/userdata
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      test: [ "CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1" ]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -66,6 +66,7 @@ services:
 volumes:
   rabbitmq_data:
   bot_users:
+
 
 networks:
   arbitro:

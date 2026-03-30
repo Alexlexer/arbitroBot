@@ -1,8 +1,7 @@
 @import "tailwindcss";
 
-:root {
-  font-family: 'Inter', system-ui, Avenir, Helvetica, Arial, sans-serif;
-  color-scheme: dark;
+@theme {
+  --color-slate-950: #020617;
 }
 
 body {
@@ -10,7 +9,8 @@ body {
   display: flex;
   min-width: 320px;
   min-height: 100vh;
-  background-color: #000; /* monochrome */
+  background-color: #020617;
+  /* slate-950 */
 }
 
 #root {
@@ -18,18 +18,18 @@ body {
 }
 
 ::-webkit-scrollbar {
-  width: 8px;
+  width: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #000;
+  background: #020617;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #111;
+  background: #1e293b;
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #222;
+  background: #334155;
 }

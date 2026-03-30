@@ -128,3 +128,114 @@ impl RebalanceAdvisor {
         required.max(Decimal::ZERO).round_dp(0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{GlobalAccountState, ExchangeAccountState};
+    use crate::config::AppConfig;
+    use std::collections::HashMap;
+
+    fn mock_config() -> AppConfig {
+        AppConfig {
+            margin_threshold_low: Decimal::new(4, 1),      // 40%
+            margin_threshold_high: Decimal::new(7, 1),     // 70%
+            concentration_threshold: Decimal::new(7, 1),   // 70%
+            target_margin_ratio: Decimal::new(2, 1),       // 20%
+            polling_interval_ms: 5000,
+            automated_rebalance_enabled: false,
+            wallets: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_calculate_required_amount() {
+        let config = mock_config();
+        let advisor = RebalanceAdvisor::new(&config);
+
+        // Scenario: Total=1000, Available=0. 
+        // To get 20% margin ratio (Avail=800, Margin=200):
+        // X = ((1 - 0.2) * 1000 - 0) / 0.2 = (0.8 * 1000) / 0.2 = 800 / 0.2 = 4000.
+        // Wait, if we add 4000, Total becomes 5000, Available becomes 4000.
+        // Margin = Total - Avail = 1000.
+        // Ratio = 1000 / 5000 = 0.2 (20%). Math is correct.
+        let required = advisor.calculate_required_amount(Decimal::new(1000, 0), Decimal::ZERO);
+        assert_eq!(required, Decimal::new(4000, 0));
+
+        // Scenario: Margin ratio is already 10% (Total=1000, Avail=900).
+        // Target is 20%. Need more funds? 
+        // X = (0.8 * 1000 - 900) / 0.2 = (800 - 900) / 0.2 = -100 / 0.2 = -500. 
+        // Max(0) = 0. Correct.
+        let required = advisor.calculate_required_amount(Decimal::new(1000, 0), Decimal::new(900, 0));
+        assert_eq!(required, Decimal::ZERO);
+    }
+
+    #[test]
+    fn test_concentration_risk() {
+        let config = mock_config();
+        let advisor = RebalanceAdvisor::new(&config);
+        
+        let mut state = GlobalAccountState {
+            total_equity_usdt: Decimal::new(10000, 0),
+            total_unrealized_pnl: Decimal::ZERO,
+            exchange_states: HashMap::new(),
+            asset_statuses: HashMap::new(),
+            config: AppConfig::default(),
+        };
+
+        // Binance has 80% of funds ($8000 / $10000)
+        state.exchange_states.insert(ExchangeId::Binance, ExchangeAccountState {
+            total_equity: Decimal::new(8000, 0),
+            available_balance: Decimal::new(7000, 0),
+            margin_ratio: Decimal::new(1, 1), // 10%
+            positions: vec![],
+        });
+        state.exchange_states.insert(ExchangeId::Bybit, ExchangeAccountState {
+            total_equity: Decimal::new(2000, 0),
+            available_balance: Decimal::new(1800, 0),
+            margin_ratio: Decimal::new(1, 1),
+            positions: vec![],
+        });
+
+        let advices = advisor.check(&state);
+        // Should find 1 advice for concentration risk
+        assert!(advices.iter().any(|a| a.reason.contains("Concentration Risk")));
+    }
+
+    #[test]
+    fn test_recipient_donor_matching() {
+        let config = mock_config();
+        let advisor = RebalanceAdvisor::new(&config);
+
+        let mut state = GlobalAccountState {
+            total_equity_usdt: Decimal::new(2000, 0),
+            total_unrealized_pnl: Decimal::ZERO,
+            exchange_states: HashMap::new(),
+            asset_statuses: HashMap::new(),
+            config: AppConfig::default(),
+        };
+
+        // Binance: Margin Ratio 50% (High pressure, needs funds)
+        state.exchange_states.insert(ExchangeId::Binance, ExchangeAccountState {
+            total_equity: Decimal::new(1000, 0),
+            available_balance: Decimal::new(500, 0),
+            margin_ratio: Decimal::new(5, 1),
+            positions: vec![],
+        });
+
+        // Bybit: Margin Ratio 5% (Healthy donor)
+        state.exchange_states.insert(ExchangeId::Bybit, ExchangeAccountState {
+            total_equity: Decimal::new(1000, 0),
+            available_balance: Decimal::new(950, 0),
+            margin_ratio: Decimal::new(5, 2),
+            positions: vec![],
+        });
+
+        let advices = advisor.check(&state);
+        assert!(!advices.is_empty());
+        let advice = &advices[0];
+        assert_eq!(advice.from_exchange, ExchangeId::Bybit);
+        assert_eq!(advice.to_exchange, ExchangeId::Binance);
+        assert!(advice.amount_usdt > Decimal::ZERO);
+    }
+}

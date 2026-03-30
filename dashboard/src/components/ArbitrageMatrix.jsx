@@ -1,118 +1,93 @@
 import React from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Zap, TrendingUp, TrendingDown } from 'lucide-react';
-import { getOpportunities } from '../utils/opportunities';
 
-const formatPrice = (price) => {
-    if (price === 0) return '$0.00';
-    if (price < 0.0001) return `$${price.toFixed(12)}`;
-    if (price < 0.01) return `$${price.toFixed(8)}`;
-    if (price < 1) return `$${price.toFixed(6)}`;
-    return `$${price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
-};
-
-/** Row: live { symbol, bestLong, bestShort, spread } or snapshot { symbol, longExchange, longPrice, shortExchange, shortPrice, spread }. Memoized to avoid re-renders. */
-const Row = React.memo(({ item }) => {
-    // History API returns snake_case fields (long_exchange/long_price),
-    // while listener/live snapshots may use camelCase (longExchange/longPrice).
-    if (!item) return null;
-
-    const isSnapshot = ('longExchange' in item) || ('long_exchange' in item);
-    const symbol = item.symbol ?? '';
-    const spread = typeof item.spread === 'number' ? item.spread : (item.spread != null ? parseFloat(item.spread) : 0) || 0;
-    const longLabel = isSnapshot
-        ? (item.longExchange ?? item.long_exchange)
-        : item?.bestLong?.exchange;
-    const longPrice = isSnapshot
-        ? (item.longPrice ?? item.long_price ?? 0)
-        : (() => {
-            const p = item?.bestLong?.asks?.[0]?.[0];
-            return p != null ? parseFloat(p) : 0;
-          })();
-    const shortLabel = isSnapshot
-        ? (item.shortExchange ?? item.short_exchange)
-        : item?.bestShort?.exchange;
-    const shortPrice = isSnapshot
-        ? (item.shortPrice ?? item.short_price ?? 0)
-        : (() => {
-            const p = item?.bestShort?.bids?.[0]?.[0];
-            return p != null ? parseFloat(p) : 0;
-          })();
+const ArbitrageMatrix = ({ tickers }) => {
+    // Group tickers by symbol
+    const symbols = [...new Set(Object.values(tickers).map(t => t.symbol))];
 
     return (
-        <tr className="border-b border-white/10 hover:bg-white/5 transition-colors group">
-            <td className="py-4 px-4 font-mono font-bold text-white/90 group-hover:text-white transition-colors">{symbol}</td>
-            <td className="py-4 px-4">
-                <div className="text-xs text-white/60 uppercase font-semibold">{longLabel}</div>
-                <div className="text-white/70 font-mono text-sm font-medium">{formatPrice(longPrice)}</div>
-            </td>
-            <td className="py-4 px-4">
-                <div className="text-xs text-white/60 uppercase font-semibold">{shortLabel}</div>
-                <div className="text-white/70 font-mono text-sm font-medium">{formatPrice(shortPrice)}</div>
-            </td>
-            <td className="py-4 px-4 text-right">
-                <div className={`inline-flex items-center gap-1 rounded-full px-3 py-1 font-mono text-sm font-bold ${spread > 0 ? 'bg-white/5 text-white/90 border border-white/10' : 'bg-white/5 text-white/90 border border-white/10'}`}>
-                    {spread > 0 ? <TrendingUp className="w-3 h-3 text-white/70" /> : <TrendingDown className="w-3 h-3 text-white/70" />}
-                    {spread.toFixed(2)}%
-                </div>
-            </td>
-        </tr>
-    );
-});
-
-const ArbitrageMatrix = ({ tickers, botConfig, snapshotOpportunities, snapshotLabel }) => {
-    const [sortDirection, setSortDirection] = React.useState('desc');
-
-    const handleSortToggle = () => {
-        setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
-    };
-
-    const limitedOpportunities = React.useMemo(() => {
-        if (snapshotOpportunities && snapshotOpportunities.length > 0) {
-            const sorted = [...snapshotOpportunities].sort((a, b) => sortDirection === 'asc' ? a.spread - b.spread : b.spread - a.spread);
-            return sorted;
-        }
-        const opportunities = getOpportunities(tickers || {}, botConfig, 50);
-        opportunities.sort((a, b) => sortDirection === 'asc' ? a.spread - b.spread : b.spread - a.spread);
-        return opportunities;
-    }, [tickers, botConfig, snapshotOpportunities, sortDirection]);
-
-    const title = snapshotLabel != null ? snapshotLabel : 'Live Arbitrage Matrix';
-    const count = limitedOpportunities.length;
-
-    return (
-        <div className="bg-black/70 backdrop-blur-xl rounded-2xl border border-white/10 p-6 shadow-2xl flex flex-col h-full max-h-[calc(100vh-180px)]">
-            <div className="flex items-center gap-2 mb-6 text-white/70">
-                <Zap className="w-5 h-5 fill-white/70" />
-                <h2 className="text-xl font-bold tracking-tight text-white">{title}</h2>
-                <span className="text-[10px] bg-white/5 px-2 py-0.5 rounded text-white/60 uppercase font-bold ml-auto">
-                    {count} row{count !== 1 ? 's' : ''}
-                </span>
+        <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl border border-slate-800 p-6 shadow-2xl">
+            <div className="flex items-center gap-2 mb-6 text-indigo-400">
+                <Zap className="w-5 h-5 fill-indigo-400" />
+                <h2 className="text-xl font-bold tracking-tight text-white">Live Arbitrage Matrix</h2>
             </div>
 
-            <div className="overflow-y-auto pr-2 custom-scrollbar flex-1">
+            <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                     <thead>
-                        <tr className="border-b border-white/10 text-white/60 text-sm font-medium">
-                            <th className="pb-4 px-4 text-white/70">Symbol</th>
-                            <th className="pb-4 px-4 text-white/70">Best Long</th>
-                            <th className="pb-4 px-4 text-white/70">Best Short</th>
-                            <th className="pb-4 px-4 text-right cursor-pointer select-none group/sort" onClick={handleSortToggle}>
-                                <div className="flex items-center justify-end gap-1 group-hover:text-white transition-colors">
-                                    Spread %
-                                    {sortDirection === 'desc' ? <TrendingDown className="w-3 h-3" /> : <TrendingUp className="w-3 h-3" />}
-                                </div>
-                            </th>
+                        <tr className="border-b border-slate-800 text-slate-400 text-sm font-medium">
+                            <th className="pb-4 px-4">Symbol</th>
+                            <th className="pb-4 px-4">Best Long</th>
+                            <th className="pb-4 px-4">Best Short</th>
+                            <th className="pb-4 px-4 text-right">Spread %</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {limitedOpportunities.map((opp, idx) => (
-                            <Row key={opp.symbol + (opp.timestamp ?? idx)} item={opp} />
-                        ))}
+                        <AnimatePresence mode="popLayout">
+                            {Object.entries(groupBySymbol(tickers)).map(([symbol, exts]) => {
+                                const { bestLong, bestShort, spread } = calculateSpread(exts);
+                                if (!bestLong || !bestShort) return null;
+
+                                return (
+                                    <motion.tr
+                                        key={symbol}
+                                        layout
+                                        initial={{ opacity: 0, scale: 0.98 }}
+                                        animate={{ opacity: 1, scale: 1 }}
+                                        exit={{ opacity: 0, scale: 0.98 }}
+                                        className="border-b border-slate-800/50 hover:bg-white/5 transition-colors group"
+                                    >
+                                        <td className="py-4 px-4 font-mono font-bold text-white group-hover:text-indigo-400 transition-colors">
+                                            {symbol}
+                                        </td>
+                                        <td className="py-4 px-4">
+                                            <div className="text-xs text-slate-500 uppercase font-semibold">{bestLong.exchange}</div>
+                                            <div className="text-green-400 font-mono text-sm font-medium">
+                                                ${bestLong.best_ask[0].toFixed(4)}
+                                            </div>
+                                        </td>
+                                        <td className="py-4 px-4">
+                                            <div className="text-xs text-slate-500 uppercase font-semibold">{bestShort.exchange}</div>
+                                            <div className="text-red-400 font-mono text-sm font-medium">
+                                                ${bestShort.best_bid[0].toFixed(4)}
+                                            </div>
+                                        </td>
+                                        <td className="py-4 px-4 text-right">
+                                            <div className={`inline-flex items-center gap-1 rounded-full px-3 py-1 font-mono text-sm font-bold ${spread > 0 ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                                                }`}>
+                                                {spread > 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                                                {spread.toFixed(2)}%
+                                            </div>
+                                        </td>
+                                    </motion.tr>
+                                );
+                            })}
+                        </AnimatePresence>
                     </tbody>
                 </table>
             </div>
         </div>
     );
+};
+
+const groupBySymbol = (tickers) => {
+    return Object.values(tickers).reduce((acc, t) => {
+        if (!acc[t.symbol]) acc[t.symbol] = [];
+        acc[t.symbol].push(t);
+        return acc;
+    }, {});
+};
+
+const calculateSpread = (exchanges) => {
+    if (exchanges.length < 2) return { bestLong: null, bestShort: null, spread: 0 };
+
+    const bestLong = exchanges.reduce((a, b) => a.best_ask[0] < b.best_ask[0] ? a : b);
+    const bestShort = exchanges.reduce((a, b) => a.best_bid[0] > b.best_bid[0] ? a : b);
+
+    const spread = ((bestShort.best_bid[0] - bestLong.best_ask[0]) / bestLong.best_ask[0]) * 100;
+
+    return { bestLong, bestShort, spread };
 };
 
 export default ArbitrageMatrix;

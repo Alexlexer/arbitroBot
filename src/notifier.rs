@@ -16,23 +16,18 @@ enum UserState {
 
 pub struct TelegramNotifier {
     client: Client,
-    token: String,
-    chat_id: Mutex<String>,
+    secrets: Arc<Mutex<crate::config::SecretsConfig>>,
     password: String,
     states: Mutex<HashMap<String, UserState>>,
     account_state: Arc<Mutex<crate::model::GlobalAccountState>>,
-    enabled: bool,
+    config: Arc<Mutex<crate::config::AppConfig>>,
 }
 
 impl TelegramNotifier {
     pub fn new(account_state: Arc<Mutex<crate::model::GlobalAccountState>>) -> Self {
         let token = env::var("TELEGRAM_BOT_TOKEN").unwrap_or_default();
         let chat_id = env::var("TELEGRAM_CHAT_ID").unwrap_or_default();
-        // Require explicit password when Telegram is enabled; no insecure default
-        let password = env::var("BOT_PASSWORD").unwrap_or_default();
-        if !token.is_empty() && password.is_empty() {
-            info!("BOT_PASSWORD not set - /login will be disabled until you set it in .env");
-        }
+        let password = env::var("BOT_PASSWORD").unwrap_or_else(|_| "admin123".to_string());
         let enabled = !token.is_empty();
 
         if token.is_empty() {
@@ -43,33 +38,75 @@ impl TelegramNotifier {
 
         Self {
             client: Client::new(),
-            token,
-            chat_id: Mutex::new(chat_id),
+            secrets,
             password,
             states: Mutex::new(HashMap::new()),
             account_state,
-            enabled,
+            config,
         }
     }
 
     pub async fn send_alert(&self, message: &str) {
-        if !self.enabled {
-            return;
-        }
-        let cid = self.chat_id.lock().unwrap().clone();
-        if cid.is_empty() {
-            return;
-        }
-        self.send_to_chat(&cid, message).await;
+        let cid = {
+            let sec = self.secrets.lock().unwrap();
+            sec.telegram_chat_id.clone().unwrap_or_default()
+        };
+        if cid.is_empty() { return; }
+        self.send_to_chat(&cid, message, None).await;
     }
 
-    async fn send_to_chat(&self, chat_id: &str, message: &str) {
-        let url = format!("https://api.telegram.org/bot{}/sendMessage", self.token);
-        let params = [
-            ("chat_id", &chat_id.to_string()),
-            ("text", &message.to_string()),
-            ("parse_mode", &"Markdown".to_string()),
+    pub async fn send_rebalance_confirmation(&self, advice: &crate::model::RebalanceAdvice) {
+
+        // Rebalance specific enablement check
+        {
+            let conf = self.config.lock().unwrap();
+            if !conf.automated_rebalance_enabled {
+                return;
+            }
+        }
+        let cid = {
+            let sec = self.secrets.lock().unwrap();
+            sec.telegram_chat_id.clone().unwrap_or_default()
+        };
+        if cid.is_empty() { return; }
+
+        let message = format!(
+            "🚨 *REBALANCE ADVICE*\n\n\
+            From: *{}*\n\
+            To: *{}*\n\
+            Amount: `${:.2} USDT`\n\
+            Reason: _{}_",
+            advice.from_exchange, advice.to_exchange, advice.amount_usdt, advice.reason
+        );
+
+        let callback_data = format!("rebalance_exec:{}:{}:{}", advice.from_exchange, advice.to_exchange, advice.amount_usdt);
+        let keyboard = serde_json::json!({
+            "inline_keyboard": [[
+                { "text": "✅ Execute", "callback_data": callback_data },
+                { "text": "❌ Cancel", "callback_data": "rebalance_cancel" }
+            ]]
+        });
+
+        self.send_to_chat(&cid, &message, Some(keyboard)).await;
+    }
+
+    async fn send_to_chat(&self, chat_id: &str, message: &str, reply_markup: Option<serde_json::Value>) {
+        let token = {
+            let sec = self.secrets.lock().unwrap();
+            sec.telegram_token.clone().unwrap_or_default()
+        };
+        if token.is_empty() { return; }
+
+        let url = format!("https://api.telegram.org/bot{}/sendMessage", token);
+        let mut params = vec![
+            ("chat_id".to_string(), chat_id.to_string()),
+            ("text".to_string(), message.to_string()),
+            ("parse_mode".to_string(), "Markdown".to_string()),
         ];
+
+        if let Some(markup) = reply_markup {
+            params.push(("reply_markup".to_string(), markup.to_string()));
+        }
 
         match self.client.post(&url).form(&params).send().await {
             Ok(resp) => {
@@ -85,13 +122,21 @@ impl TelegramNotifier {
     }
 
     pub async fn run_listener(&self) {
-        if !self.enabled { return; }
         
         info!("Starting Telegram Command Listener...");
         let mut offset = 0;
 
         loop {
-            let url = format!("https://api.telegram.org/bot{}/getUpdates?offset={}&timeout=30", self.token, offset);
+            let token = {
+                let sec = self.secrets.lock().unwrap();
+                sec.telegram_token.clone().unwrap_or_default()
+            };
+            if token.is_empty() {
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                continue;
+            }
+
+            let url = format!("https://api.telegram.org/bot{}/getUpdates?offset={}&timeout=30", token, offset);
             
             match self.client.get(&url).send().await {
                 Ok(resp) => {
@@ -100,6 +145,14 @@ impl TelegramNotifier {
                             for update in updates {
                                 if let Some(update_id) = update["update_id"].as_i64() {
                                     offset = update_id + 1;
+                                }
+
+                                if let Some(callback) = update["callback_query"].as_object() {
+                                    let chat_id = callback["message"]["chat"]["id"].to_string();
+                                    let data = callback["data"].as_str().unwrap_or("");
+                                    let callback_id = callback["id"].as_str().unwrap_or("");
+
+                                    self.handle_callback(&chat_id, data, callback_id).await;
                                 }
 
                                 if let Some(message) = update["message"].as_object() {
@@ -130,16 +183,17 @@ impl TelegramNotifier {
             UserState::AwaitingPassword => {
                 if text == self.password {
                     {
-                        let mut cid = self.chat_id.lock().unwrap();
-                        *cid = chat_id.to_string();
+                        let mut sec = self.secrets.lock().unwrap();
+                        sec.telegram_chat_id = Some(chat_id.to_string());
+                        let _ = sec.save();
                     }
                     {
                         let mut s_map = self.states.lock().unwrap();
                         s_map.insert(chat_id.to_string(), UserState::Idle);
                     }
-                    self.send_to_chat(chat_id, "✅ *Login Successful!*\nYou are now the authorized user for this bot. Alerts will be sent here.").await;
+                    self.send_to_chat(chat_id, "✅ *Login Successful!*\nYou are now the authorized user for this bot. Alerts will be sent here.", None).await;
                 } else {
-                    self.send_to_chat(chat_id, "❌ *Incorrect Password.*\nPlease try again or use /login to restart.").await;
+                    self.send_to_chat(chat_id, "❌ *Incorrect Password.*\nPlease try again or use /login to restart.", None).await;
                     {
                         let mut s_map = self.states.lock().unwrap();
                         s_map.insert(chat_id.to_string(), UserState::Idle);
@@ -159,9 +213,9 @@ impl TelegramNotifier {
                         let mut s_map = self.states.lock().unwrap();
                         s_map.insert(chat_id.to_string(), UserState::AwaitingApiKey(ex));
                     }
-                    self.send_to_chat(chat_id, &format!("⚙️ *Setup: {}*\nPlease enter your **API Key**:", ex)).await;
+                    self.send_to_chat(chat_id, &format!("⚙️ *Setup: {}*\nPlease enter your **API Key**:", ex), None).await;
                 } else {
-                   self.send_to_chat(chat_id, "❌ *Invalid Exchange.*\nPlease type: Binance, Bybit, or Bitget (or type /cancel):").await;
+                   self.send_to_chat(chat_id, "❌ *Invalid Exchange.*\nPlease type: Binance, Bybit, or Bitget (or type /cancel):", None).await;
                 }
             }
             UserState::AwaitingApiKey(ex) => {
@@ -169,7 +223,7 @@ impl TelegramNotifier {
                     let mut s_map = self.states.lock().unwrap();
                     s_map.insert(chat_id.to_string(), UserState::AwaitingApiSecret(ex, text.to_string()));
                 }
-                self.send_to_chat(chat_id, "🔐 *Setup: API Secret*\nPlease enter your **API Secret** (it will NOT be shown in logs):").await;
+                self.send_to_chat(chat_id, "🔐 *Setup: API Secret*\nPlease enter your **API Secret** (it will NOT be shown in logs):", None).await;
             }
             UserState::AwaitingApiSecret(ex, key) => {
                 if ex == crate::model::ExchangeId::Bitget {
@@ -177,14 +231,14 @@ impl TelegramNotifier {
                         let mut s_map = self.states.lock().unwrap();
                         s_map.insert(chat_id.to_string(), UserState::AwaitingBitgetPassphrase(ex, key, text.to_string()));
                     }
-                    self.send_to_chat(chat_id, "🔑 *Setup: Passphrase (Bitget)*\nPlease enter your API Passphrase:").await;
+                    self.send_to_chat(chat_id, "🔑 *Setup: Passphrase (Bitget)*\nPlease enter your API Passphrase:", None).await;
                 } else {
                     self.save_credentials(ex, &key, text, "").await;
                     {
                         let mut s_map = self.states.lock().unwrap();
                         s_map.insert(chat_id.to_string(), UserState::Idle);
                     }
-                    self.send_to_chat(chat_id, &format!("✅ *Credentials saved for {}!* \nBot will now start polling your private data.", ex)).await;
+                    self.send_to_chat(chat_id, &format!("✅ *Credentials saved for {}!* \nBot will now start polling your private data.", ex), None).await;
                 }
             }
             UserState::AwaitingBitgetPassphrase(ex, key, secret) => {
@@ -193,7 +247,7 @@ impl TelegramNotifier {
                     let mut s_map = self.states.lock().unwrap();
                     s_map.insert(chat_id.to_string(), UserState::Idle);
                 }
-                self.send_to_chat(chat_id, &format!("✅ *Credentials saved for {}!* \nBot will now start polling your private data.", ex)).await;
+                self.send_to_chat(chat_id, &format!("✅ *Credentials saved for {}!* \nBot will now start polling your private data.", ex), None).await;
             }
             UserState::Idle => {
                 self.handle_command(chat_id, text).await;
@@ -202,7 +256,10 @@ impl TelegramNotifier {
     }
 
     async fn handle_command(&self, chat_id: &str, text: &str) {
-        let authorized_cid = self.chat_id.lock().unwrap().clone();
+        let authorized_cid = {
+            let sec = self.secrets.lock().unwrap();
+            sec.telegram_chat_id.clone().unwrap_or_default()
+        };
 
         // Security check for regular commands
         if !authorized_cid.is_empty() && chat_id != authorized_cid {
@@ -224,12 +281,13 @@ impl TelegramNotifier {
                 let input_pass = parts[1];
                 if input_pass == self.password {
                     {
-                        let mut cid = self.chat_id.lock().unwrap();
-                        *cid = chat_id.to_string();
+                        let mut sec = self.secrets.lock().unwrap();
+                        sec.telegram_chat_id = Some(chat_id.to_string());
+                        let _ = sec.save();
                     }
-                    self.send_to_chat(chat_id, "✅ *Login Successful!*\nYou provided the correct password. You are now authorized.").await;
+                    self.send_to_chat(chat_id, "✅ *Login Successful!*\nYou provided the correct password. You are now authorized.", None).await;
                 } else {
-                    self.send_to_chat(chat_id, "❌ *Incorrect Password.*").await;
+                    self.send_to_chat(chat_id, "❌ *Incorrect Password.*", None).await;
                 }
             } else {
                 // Multi-step login: /login
@@ -237,7 +295,7 @@ impl TelegramNotifier {
                     let mut s_map = self.states.lock().unwrap();
                     s_map.insert(chat_id.to_string(), UserState::AwaitingPassword);
                 }
-                self.send_to_chat(chat_id, "🔐 *Authentication Required*\nPlease enter the Access Password:").await;
+                self.send_to_chat(chat_id, "🔐 *Authentication Required*\nPlease enter the Access Password:", None).await;
             }
             return;
         }
@@ -247,7 +305,7 @@ impl TelegramNotifier {
                 let mut s_map = self.states.lock().unwrap();
                 s_map.insert(chat_id.to_string(), UserState::AwaitingExchangeSelection);
             }
-            self.send_to_chat(chat_id, "🛠 *API Hookup Wizard*\nWhich exchange do you want to configure?\n\nType: **Binance**, **Bybit**, or **Bitget**").await;
+            self.send_to_chat(chat_id, "🛠 *API Hookup Wizard*\nWhich exchange do you want to configure?\n\nType: **Binance**, **Bybit**, or **Bitget**", None).await;
             return;
         }
 
@@ -256,14 +314,14 @@ impl TelegramNotifier {
                 let mut s_map = self.states.lock().unwrap();
                 s_map.insert(chat_id.to_string(), UserState::Idle);
             }
-            self.send_to_chat(chat_id, "🚫 Setup cancelled.").await;
+            self.send_to_chat(chat_id, "🚫 Setup cancelled.", None).await;
             return;
         }
 
         match text {
             "/start" => {
                 let msg = format!("👋 *Arbitrage Hub Bot*\n\nAvailable commands:\n/login <pass> - Direct login\n/setup - Configure API Keys\n/status - System status\n/ping - Simple check");
-                self.send_to_chat(chat_id, &msg).await;
+                self.send_to_chat(chat_id, &msg, None).await;
             }
             "/status" => {
                 let msg = {
@@ -283,14 +341,14 @@ impl TelegramNotifier {
                         state_lock.total_equity_usdt, state_lock.total_unrealized_pnl, exchange_summary
                     )
                 };
-                self.send_to_chat(chat_id, &msg).await;
+                self.send_to_chat(chat_id, &msg, None).await;
             }
             "/ping" => {
-                self.send_to_chat(chat_id, "🏓 Pong!").await;
+                self.send_to_chat(chat_id, "🏓 Pong!", None).await;
             }
             _ => {
                 if text.starts_with('/') {
-                    self.send_to_chat(chat_id, "❓ Unknown command. Try /start").await;
+                    self.send_to_chat(chat_id, "❓ Unknown command. Try /start", None).await;
                 }
             }
         }
@@ -329,8 +387,115 @@ impl TelegramNotifier {
             if !pass_line.is_empty() {
                 let _ = file.write_all(pass_line.as_bytes());
             }
-            info!("Saved {} credentials to .env", prefix);
         }
+    }
+
+    async fn handle_callback(&self, chat_id: &str, data: &str, callback_id: &str) {
+        if data == "rebalance_cancel" {
+            let _ = self.answer_callback(callback_id, "Rebalance cancelled.").await;
+            let _ = self.send_to_chat(chat_id, "🚫 *Rebalance cancelled* by user.", None).await;
+            return;
+        }
+
+        if data.starts_with("rebalance_exec:") {
+            let parts: Vec<&str> = data.split(':').collect();
+            if parts.len() == 4 {
+                let from_str = parts[1];
+                let to_str = parts[2];
+                let amount_str = parts[3];
+                
+                let _ = self.answer_callback(callback_id, "Executing transfer...").await;
+                let _ = self.send_to_chat(chat_id, &format!("⏳ *Executing transfer* of `${}` from *{}* to *{}*...", amount_str, from_str, to_str), None).await;
+                
+                info!("USER AUTHORIZED REBALANCE: From {} to {} Amount {}", from_str, to_str, amount_str);
+
+                // Actual execution logic
+                let from_eid = match from_str.to_lowercase().as_str() {
+                    "binance" => crate::model::ExchangeId::Binance,
+                    "bybit" => crate::model::ExchangeId::Bybit,
+                    "mexc" => crate::model::ExchangeId::MEXC,
+                    "okx" => crate::model::ExchangeId::Okx,
+                    _ => {
+                        let _ = self.send_to_chat(chat_id, "❌ Error: Unsupported exchange.", None).await;
+                        return;
+                    }
+                };
+
+                let to_eid = match to_str.to_lowercase().as_str() {
+                    "binance" => crate::model::ExchangeId::Binance,
+                    "bybit" => crate::model::ExchangeId::Bybit,
+                    "mexc" => crate::model::ExchangeId::MEXC,
+                    "okx" => crate::model::ExchangeId::Okx,
+                    _ => {
+                        let _ = self.send_to_chat(chat_id, "❌ Error: Unsupported target exchange.", None).await;
+                        return;
+                    }
+                };
+
+                let amount: rust_decimal::Decimal = amount_str.parse().unwrap_or_default();
+                
+                let address = {
+                    let conf = self.config.lock().unwrap();
+                    conf.wallets.get(&to_eid).cloned()
+                };
+
+                if let Some(addr) = address {
+                    if addr.contains("YOUR_") {
+                        let _ = self.send_to_chat(chat_id, "❌ *Error*: Wallet address not configured in `config.json`.", None).await;
+                        return;
+                    }
+                    
+                    let token_opt = {
+                        let sec = self.secrets.lock().unwrap();
+                        sec.telegram_token.clone()
+                    };
+                    let t_cid = chat_id.to_string();
+                    let client = self.client.clone();
+                    
+                    if let Some(token_clone) = token_opt {
+                        let addr_owned = addr.clone();
+                        let to_str_owned = to_str.to_string();
+
+                        tokio::spawn(async move {
+                            match crate::transfers::execute_withdrawal(&client, from_eid, &addr_owned, amount).await {
+                                Ok(id) => {
+                                    let url = format!("https://api.telegram.org/bot{}/sendMessage", token_clone);
+                                    let message = format!("✅ *Transfer Successful!*\nID: `{}`\nFunds are on their way to {}.", id, to_str_owned);
+                                    let _ = reqwest::Client::new().post(&url)
+                                        .form(&[("chat_id", &t_cid), ("text", &message), ("parse_mode", &"Markdown".to_string())])
+                                        .send().await;
+                                }
+                                Err(e) => {
+                                    let url = format!("https://api.telegram.org/bot{}/sendMessage", token_clone);
+                                    let message = format!("❌ *Transfer Failed*\nError: `{}`", e);
+                                    let _ = reqwest::Client::new().post(&url)
+                                        .form(&[("chat_id", &t_cid), ("text", &message), ("parse_mode", &"Markdown".to_string())])
+                                        .send().await;
+                                }
+                            }
+                        });
+                    }
+                } else {
+                    let _ = self.send_to_chat(chat_id, &format!("❌ *Error*: No wallet address found for {} in config.", to_str), None).await;
+                }
+            }
+        }
+    }
+
+    async fn answer_callback(&self, callback_id: &str, text: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let token = {
+            let sec = self.secrets.lock().unwrap();
+            sec.telegram_token.clone().unwrap_or_default()
+        };
+        if token.is_empty() { return Ok(()); }
+
+        let url = format!("https://api.telegram.org/bot{}/answerCallbackQuery", token);
+        let params = [
+            ("callback_query_id", callback_id.to_string()),
+            ("text", text.to_string()),
+        ];
+        self.client.post(&url).form(&params).send().await?;
+        Ok(())
     }
 
     async fn save_credentials(&self, exchange: crate::model::ExchangeId, key: &str, secret: &str, passphrase: &str) {

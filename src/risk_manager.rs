@@ -6,12 +6,16 @@ use rust_decimal::Decimal;
 use std::collections::HashMap;
 
 pub struct RiskManager {
-    // Configuration constants could go here
+    pub config: std::sync::Arc<std::sync::Mutex<crate::config::AppConfig>>,
+    pub secrets: std::sync::Arc<std::sync::Mutex<crate::config::SecretsConfig>>,
 }
 
 impl RiskManager {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(
+        config: std::sync::Arc<std::sync::Mutex<crate::config::AppConfig>>,
+        secrets: std::sync::Arc<std::sync::Mutex<crate::config::SecretsConfig>>,
+    ) -> Self {
+        Self { config, secrets }
     }
 
     /// Max USDT volume that can be traded without exceeding max_slippage_pct (e.g. 0.001 = 0.1%).
@@ -317,5 +321,127 @@ impl RiskManager {
     pub fn _normalize_amount(amount: Decimal, step_size: Decimal) -> Decimal {
         if step_size.is_zero() { return amount; }
         (amount / step_size).floor() * step_size
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    use crate::model::*;
+
+    fn mock_opp() -> ArbitrageOpportunity {
+        ArbitrageOpportunity {
+            symbol: "BTC".into(),
+            long_exchange: ExchangeId::Binance,
+            short_exchange: ExchangeId::Bybit,
+            long_price: Decimal::new(50000, 0),
+            short_price: Decimal::new(50500, 0),
+            spread_pct: Decimal::new(1, 2), // 1%
+            _timestamp: 0,
+        }
+    }
+
+    #[test]
+    fn test_check_margin_ratio() {
+        let config = Arc::new(Mutex::new(crate::config::AppConfig::default()));
+        let risk = RiskManager::new(config);
+        let opp = mock_opp();
+        let mut state = GlobalAccountState {
+            total_equity_usdt: Decimal::new(2000, 0),
+            total_unrealized_pnl: Decimal::ZERO,
+            exchange_states: HashMap::new(),
+            asset_statuses: HashMap::new(),
+            config: crate::config::AppConfig::default(),
+        };
+
+        // Safe state
+        state.exchange_states.insert(ExchangeId::Binance, ExchangeAccountState {
+            total_equity: Decimal::new(1000, 0),
+            available_balance: Decimal::new(500, 0),
+            margin_ratio: Decimal::new(5, 1), // 0.5 (50%)
+            positions: vec![],
+        });
+        
+        assert!(risk.check_margin_ratio(&opp, &state).is_ok());
+
+        // Unsafe state (90% margin)
+        state.exchange_states.get_mut(&ExchangeId::Binance).unwrap().margin_ratio = Decimal::new(9, 1);
+        let result = risk.check_margin_ratio(&opp, &state);
+        assert!(result.is_err());
+        if let Err(RiskError::LiquidationRisk(msg)) = result {
+            assert!(msg.contains("Margin Ratio too high"));
+        } else {
+            panic!("Expected LiquidationRisk");
+        }
+    }
+
+    #[test]
+    fn test_check_liquidity() {
+        let config = Arc::new(Mutex::new(crate::config::AppConfig::default()));
+        let risk = RiskManager::new(config);
+        let opp = mock_opp();
+        let mut depth_map = HashMap::new();
+
+        // Target $1000 volume, need $3000 liquidity
+        let target_vol = Decimal::new(1000, 0);
+
+        // Good liquidity
+        depth_map.insert(ExchangeId::Binance, OrderBookDepth {
+            bids: vec![],
+            asks: vec![(Decimal::new(50000, 0), Decimal::new(1, 1))], // $5000 liquidity
+        });
+        depth_map.insert(ExchangeId::Bybit, OrderBookDepth {
+            bids: vec![(Decimal::new(50000, 0), Decimal::new(1, 1))], // $5000 liquidity
+            asks: vec![],
+        });
+
+        assert!(risk.check_liquidity(&opp, &depth_map, target_vol).is_ok());
+
+        // Poor liquidity on Long side
+        depth_map.get_mut(&ExchangeId::Binance).unwrap().asks = vec![(Decimal::new(50000, 0), Decimal::new(1, 2))]; // $500 liquidity
+        assert!(risk.check_liquidity(&opp, &depth_map, target_vol).is_err());
+    }
+
+    #[test]
+    fn test_check_funding() {
+        let config = Arc::new(Mutex::new(crate::config::AppConfig::default()));
+        let risk = RiskManager::new(config);
+        let mut opp = mock_opp();
+        opp.spread_pct = Decimal::new(1, 2); // 1% spread
+        
+        let mut funding_map = HashMap::new();
+        // 0.01% vs 0.01% = 0 net
+        funding_map.insert(ExchangeId::Binance, FundingInfo { rate_pct: Decimal::new(1, 4), next_funding_time: 0 });
+        funding_map.insert(ExchangeId::Bybit, FundingInfo { rate_pct: Decimal::new(1, 4), next_funding_time: 0 });
+
+        assert!(risk.check_funding(&opp, &funding_map).is_ok());
+
+        // Extreme funding: 0.5% vs -0.5% = 1% net cost per interval. 3 intervals = 3%.
+        // Spread is only 1%. 3% loss > 0.5% (50% spread threshold).
+        funding_map.get_mut(&ExchangeId::Binance).unwrap().rate_pct = Decimal::new(5, 3); // 0.5%
+        funding_map.get_mut(&ExchangeId::Bybit).unwrap().rate_pct = Decimal::new(-5, 3); // -0.5%
+        
+        let result = risk.check_funding(&opp, &funding_map);
+        assert!(result.is_err());
+        if let Err(RiskError::HighFundingLoss(_)) = result {
+            // expected
+        } else {
+            panic!("Expected HighFundingLoss");
+        }
+    }
+
+    #[test]
+    fn test_check_timestamp_drift() {
+        let config = Arc::new(Mutex::new(crate::config::AppConfig::default()));
+        let risk = RiskManager::new(config);
+        let mut ts_map = HashMap::new();
+        let now = chrono::Utc::now().timestamp_millis();
+
+        ts_map.insert(ExchangeId::Binance, now - 100);
+        assert!(risk.check_timestamp_drift(&ts_map, 500).is_ok());
+
+        ts_map.insert(ExchangeId::Binance, now - 1000);
+        assert!(risk.check_timestamp_drift(&ts_map, 500).is_err());
     }
 }

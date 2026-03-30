@@ -133,6 +133,8 @@ pub struct GlobalAccountState {
     pub total_unrealized_pnl: Decimal,
     pub exchange_states: HashMap<ExchangeId, ExchangeAccountState>,
     pub asset_statuses: HashMap<ExchangeId, HashMap<String, AssetStatus>>,
+    pub config: crate::config::AppConfig,
+    pub secrets: crate::config::SecretsConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -154,108 +156,6 @@ pub struct RebalanceAdvice {
     pub amount_usdt: Decimal, // Recommended transfer
     pub reason: String,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApiCredentials {
-    pub key: String,
-    pub secret: String,
-    pub passphrase: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum BotCommand {
-    UpdateSpread { threshold: Decimal },
-    /// Update target depth in quote currency (USDT) for VWAP/liquidity evaluation.
-    UpdateDepth { depth_usdt: Decimal },
-    /// Update Listener WS URL (e.g. ws://host:8083/ws). Empty string disables listener.
-    UpdateListenerWsUrl { url: String },
-    ToggleExchange { exchange: ExchangeId, enabled: bool },
-    UpdateApiKeys { exchange: ExchangeId, credentials: ApiCredentials },
-    /// Update per-exchange taker fee override (decimal, e.g. 0.0004)
-    UpdateFees { exchange: ExchangeId, fee: Decimal },
-    /// Dashboard login: bot validates username + password, publishes to dashboard.auth
-    DashboardLogin { username: String, password: String, request_id: String },
-    /// Dashboard register: requires invite_code, then creates user
-    DashboardRegister { username: String, password: String, invite_code: String, request_id: String },
-}
-
-/// One row for dashboard history API (serializable).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HistoryOpportunity {
-    pub symbol: String,
-    pub long_exchange: String,
-    pub long_price: f64,
-    pub short_exchange: String,
-    pub short_price: f64,
-    pub spread: f64,
-}
-
-/// Incoming message from Listener WS (`type: "alert"`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ListenerAlert {
-    pub symbol: String,
-    pub exchange: String,
-    pub kind: String,
-    pub source: String,
-    pub reason: String,
-    pub at: i64,
-    #[serde(default)]
-    pub mcap_usd: Option<f64>,
-}
-
-/// One computed row to show on the dashboard for a Listener-triggered symbol.
-/// Field names are camelCase because the dashboard matrix row expects:
-/// `longExchange`, `longPrice`, `shortExchange`, `shortPrice`, `spread`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ListenerOpportunityPayload {
-    pub symbol: String,
-    #[serde(rename = "longExchange")]
-    pub long_exchange: String,
-    #[serde(rename = "longPrice")]
-    pub long_price: f64,
-    #[serde(rename = "shortExchange")]
-    pub short_exchange: String,
-    #[serde(rename = "shortPrice")]
-    pub short_price: f64,
-    pub spread: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DashboardAuthResponse {
-    pub ok: bool,
-    pub request_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub username: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TradeRecord {
-    pub id: String,
-    pub symbol: String,
-    pub long_exchange: ExchangeId,
-    pub short_exchange: ExchangeId,
-    pub long_price: Decimal,
-    pub short_price: Decimal,
-    pub volume_usdt: Decimal,
-    pub spread_pct: Decimal,
-    pub long_status: TradeStatus,
-    pub short_status: TradeStatus,
-    pub realized_pnl_usdt: Option<Decimal>,
-    pub timestamp: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum TradeStatus {
-    Pending,
-    Filled,
-    PartialFill,
-    Failed(String),
-    Reversed,
-}
-
 pub fn normalize_symbol(s: &str) -> String {
     s.to_uppercase()
         .replace("XBT", "BTC")

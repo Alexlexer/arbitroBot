@@ -3,7 +3,7 @@ use crate::rate_limiter::RateLimiter;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::env;
+
 use std::str::FromStr;
 use log::info;
 
@@ -11,13 +11,13 @@ pub struct DataPoller {
     pub funding_rates: Arc<Mutex<HashMap<ExchangeId, HashMap<String, FundingInfo>>>>,
     pub market_filters: Arc<Mutex<HashMap<ExchangeId, HashMap<String, crate::model::SymbolMarketFilters>>>>,
     pub account_state: Arc<Mutex<crate::model::GlobalAccountState>>,
-    pub asset_statuses: Arc<Mutex<HashMap<ExchangeId, HashMap<String, crate::model::AssetStatus>>>>,
+    pub config: Arc<Mutex<crate::config::AppConfig>>,
+    pub secrets: Arc<Mutex<crate::config::SecretsConfig>>,
     rate_limiter: Arc<RateLimiter>,
-    config: Arc<Mutex<crate::config::AppConfig>>,
 }
 
 impl DataPoller {
-    pub fn new(rate_limiter: Arc<RateLimiter>, config: Arc<Mutex<crate::config::AppConfig>>) -> Self {
+    pub fn new(rate_limiter: Arc<RateLimiter>) -> Self {
         Self {
             funding_rates: Arc::new(Mutex::new(HashMap::new())),
             market_filters: Arc::new(Mutex::new(HashMap::new())),
@@ -26,45 +26,46 @@ impl DataPoller {
                 total_unrealized_pnl: Decimal::ZERO,
                 exchange_states: HashMap::new(),
                 asset_statuses: HashMap::new(),
+                config: initial_config,
+                secrets: initial_secrets,
             })),
-            asset_statuses: Arc::new(Mutex::new(HashMap::new())),
-            rate_limiter,
             config,
+            secrets,
+            rate_limiter,
         }
     }
 
     pub async fn run(&self) {
-        let client = reqwest::Client::new();
         loop {
             let mut new_rates = HashMap::new();
             let mut new_filters = HashMap::new();
 
             // 1. Fetch Binance Info & Funding
             if self.rate_limiter.check_limit(ExchangeId::Binance, false, 2.0).await {
-                if let Ok(filters) = self.fetch_binance_filters(&client).await {
+                if let Ok(filters) = self.fetch_binance_filters().await {
                     new_filters.insert(ExchangeId::Binance, filters);
                 }
-                if let Ok(rates) = self.fetch_binance_funding(&client).await {
+                if let Ok(rates) = self.fetch_binance_funding().await {
                     new_rates.insert(ExchangeId::Binance, rates);
                 }
             }
 
             // 2. Fetch Bybit Info & Funding
             if self.rate_limiter.check_limit(ExchangeId::Bybit, false, 2.0).await {
-                if let Ok(filters) = self.fetch_bybit_filters(&client).await {
+                if let Ok(filters) = self.fetch_bybit_filters().await {
                     new_filters.insert(ExchangeId::Bybit, filters);
                 }
-                if let Ok(rates) = self.fetch_bybit_funding(&client).await {
+                if let Ok(rates) = self.fetch_bybit_funding().await {
                     new_rates.insert(ExchangeId::Bybit, rates);
                 }
             }
 
             // 3. Fetch Bitget Info & Funding
             if self.rate_limiter.check_limit(ExchangeId::Bitget, false, 2.0).await {
-                if let Ok(filters) = self.fetch_bitget_filters(&client).await {
+                if let Ok(filters) = self.fetch_bitget_filters().await {
                     new_filters.insert(ExchangeId::Bitget, filters);
                 }
-                if let Ok(rates) = self.fetch_bitget_funding(&client).await {
+                if let Ok(rates) = self.fetch_bitget_funding().await {
                     new_rates.insert(ExchangeId::Bitget, rates);
                 }
             }
@@ -72,7 +73,7 @@ impl DataPoller {
             // 4. Extra Exchanges (Simplified Filters)
             for eid in &[ExchangeId::MEXC, ExchangeId::Bitmart, ExchangeId::Gate, ExchangeId::Kraken] {
                 if self.rate_limiter.check_limit(*eid, false, 2.0).await {
-                    if let Ok(filters) = self.fetch_generic_filters(&client, *eid).await {
+                    if let Ok(filters) = self.fetch_generic_filters(*eid).await {
                         new_filters.insert(*eid, filters);
                     }
                 }
@@ -91,15 +92,14 @@ impl DataPoller {
     }
 
     pub async fn run_private(&self) {
-        let client = reqwest::Client::new();
         loop {
-            self.fetch_private_data(&client).await;
+            self.fetch_private_data().await;
             tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
         }
     }
 
-    async fn fetch_binance_filters(&self, client: &reqwest::Client) -> Result<HashMap<String, crate::model::SymbolMarketFilters>, Box<dyn std::error::Error>> {
-        let resp = client.get("https://fapi.binance.com/fapi/v1/exchangeInfo").send().await?;
+    async fn fetch_binance_filters(&self) -> Result<HashMap<String, crate::model::SymbolMarketFilters>, Box<dyn std::error::Error>> {
+        let resp = self.client.get("https://fapi.binance.com/fapi/v1/exchangeInfo").send().await?;
         let json: serde_json::Value = resp.json().await?;
         let mut map = HashMap::new();
 
@@ -126,8 +126,8 @@ impl DataPoller {
         Ok(map)
     }
 
-    async fn fetch_bybit_filters(&self, client: &reqwest::Client) -> Result<HashMap<String, crate::model::SymbolMarketFilters>, Box<dyn std::error::Error>> {
-        let resp = client.get("https://api.bybit.com/v5/market/instruments-info?category=linear").send().await?;
+    async fn fetch_bybit_filters(&self) -> Result<HashMap<String, crate::model::SymbolMarketFilters>, Box<dyn std::error::Error>> {
+        let resp = self.client.get("https://api.bybit.com/v5/market/instruments-info?category=linear").send().await?;
         let json: serde_json::Value = resp.json().await?;
         let mut map = HashMap::new();
 
@@ -149,8 +149,8 @@ impl DataPoller {
         Ok(map)
     }
 
-    async fn fetch_bitget_filters(&self, client: &reqwest::Client) -> Result<HashMap<String, crate::model::SymbolMarketFilters>, Box<dyn std::error::Error>> {
-        let resp = client.get("https://api.bitget.com/api/v2/mix/market/contracts?productType=USDT-FUTURES").send().await?;
+    async fn fetch_bitget_filters(&self) -> Result<HashMap<String, crate::model::SymbolMarketFilters>, Box<dyn std::error::Error>> {
+        let resp = self.client.get("https://api.bitget.com/api/v2/mix/market/contracts?productType=USDT-FUTURES").send().await?;
         let json: serde_json::Value = resp.json().await?;
         let mut map = HashMap::new();
 
@@ -172,8 +172,8 @@ impl DataPoller {
         Ok(map)
     }
 
-    async fn fetch_binance_funding(&self, client: &reqwest::Client) -> Result<HashMap<String, FundingInfo>, Box<dyn std::error::Error>> {
-        let resp = client.get("https://fapi.binance.com/fapi/v1/premiumIndex").send().await?;
+    async fn fetch_binance_funding(&self) -> Result<HashMap<String, FundingInfo>, Box<dyn std::error::Error>> {
+        let resp = self.client.get("https://fapi.binance.com/fapi/v1/premiumIndex").send().await?;
         let json: serde_json::Value = resp.json().await?;
         let mut map = HashMap::new();
 
@@ -193,8 +193,8 @@ impl DataPoller {
         Ok(map)
     }
 
-    async fn fetch_bybit_funding(&self, client: &reqwest::Client) -> Result<HashMap<String, FundingInfo>, Box<dyn std::error::Error>> {
-        let resp = client.get("https://api.bybit.com/v5/market/tickers?category=linear").send().await?;
+    async fn fetch_bybit_funding(&self) -> Result<HashMap<String, FundingInfo>, Box<dyn std::error::Error>> {
+        let resp = self.client.get("https://api.bybit.com/v5/market/tickers?category=linear").send().await?;
         let json: serde_json::Value = resp.json().await?;
         let mut map = HashMap::new();
 
@@ -214,8 +214,8 @@ impl DataPoller {
         Ok(map)
     }
 
-    async fn fetch_bitget_funding(&self, client: &reqwest::Client) -> Result<HashMap<String, FundingInfo>, Box<dyn std::error::Error>> {
-        let resp = client.get("https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES").send().await?;
+    async fn fetch_bitget_funding(&self) -> Result<HashMap<String, FundingInfo>, Box<dyn std::error::Error>> {
+        let resp = self.client.get("https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES").send().await?;
         let json: serde_json::Value = resp.json().await?;
         let mut map = HashMap::new();
 
@@ -235,7 +235,7 @@ impl DataPoller {
         Ok(map)
     }
 
-    async fn fetch_private_data(&self, client: &reqwest::Client) {
+    async fn fetch_private_data(&self) {
         let mut exchange_states = HashMap::new();
         let mut total_equity = Decimal::ZERO;
         let mut total_pnl = Decimal::ZERO;
@@ -248,18 +248,8 @@ impl DataPoller {
         if let Ok(st) = self.fetch_mexc_asset_status(client).await { asset_statuses.insert(ExchangeId::MEXC, st); }
         if let Ok(st) = self.fetch_okx_asset_status(client).await { asset_statuses.insert(ExchangeId::Okx, st); }
 
-        let credentials = { self.config.lock().unwrap().api_keys.clone() };
-
         // 1. Binance
-        let binance_keys = credentials.get(&ExchangeId::Binance)
-            .map(|c| (c.key.clone(), c.secret.clone()))
-            .or_else(|| {
-                if let (Ok(key), Ok(secret)) = (env::var("BINANCE_API_KEY"), env::var("BINANCE_API_SECRET")) {
-                    Some((key, secret))
-                } else { None }
-            });
-
-        if let Some((key, secret)) = binance_keys {
+        if let (Ok(key), Ok(secret)) = (env::var("BINANCE_API_KEY"), env::var("BINANCE_API_SECRET")) {
             if let Ok(state) = self.fetch_binance_account(client, &key, &secret).await {
                 total_equity += state.total_equity;
                 total_pnl += state.positions.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
@@ -268,15 +258,7 @@ impl DataPoller {
         }
 
         // 2. Bybit
-        let bybit_keys = credentials.get(&ExchangeId::Bybit)
-            .map(|c| (c.key.clone(), c.secret.clone()))
-            .or_else(|| {
-                if let (Ok(key), Ok(secret)) = (env::var("BYBIT_API_KEY"), env::var("BYBIT_API_SECRET")) {
-                    Some((key, secret))
-                } else { None }
-            });
-
-        if let Some((key, secret)) = bybit_keys {
+        if let (Ok(key), Ok(secret)) = (env::var("BYBIT_API_KEY"), env::var("BYBIT_API_SECRET")) {
             if let Ok(state) = self.fetch_bybit_account(client, &key, &secret).await {
                 total_equity += state.total_equity;
                 total_pnl += state.positions.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
@@ -285,17 +267,8 @@ impl DataPoller {
         }
 
         // 3. Bitget
-        let bitget_keys = credentials.get(&ExchangeId::Bitget)
-            .map(|c| (c.key.clone(), c.secret.clone(), c.passphrase.clone().unwrap_or_default()))
-            .or_else(|| {
-                if let (Ok(key), Ok(secret)) = (env::var("BITGET_API_KEY"), env::var("BITGET_API_SECRET")) {
-                    Some((key, secret, env::var("BITGET_API_PASSPHRASE").unwrap_or_default()))
-                } else { None }
-            });
-
-        if let Some((key, secret, pphrase)) = bitget_keys {
-            // Bitget needs passphrase in fetch_bitget_account (it reads from env, let's fix that)
-            if let Ok(state) = self.fetch_bitget_account_v2(client, &key, &secret, &pphrase).await {
+        if let (Ok(key), Ok(secret)) = (env::var("BITGET_API_KEY"), env::var("BITGET_API_SECRET")) {
+            if let Ok(state) = self.fetch_bitget_account(client, &key, &secret).await {
                 total_equity += state.total_equity;
                 total_pnl += state.positions.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
                 exchange_states.insert(ExchangeId::Bitget, state);
@@ -303,15 +276,7 @@ impl DataPoller {
         }
 
         // 4. MEXC
-        let mexc_keys = credentials.get(&ExchangeId::MEXC)
-            .map(|c| (c.key.clone(), c.secret.clone()))
-            .or_else(|| {
-                if let (Ok(key), Ok(secret)) = (env::var("MEXC_API_KEY"), env::var("MEXC_API_SECRET")) {
-                    Some((key, secret))
-                } else { None }
-            });
-
-        if let Some((key, secret)) = mexc_keys {
+        if let (Ok(key), Ok(secret)) = (env::var("MEXC_API_KEY"), env::var("MEXC_API_SECRET")) {
             if let Ok(state) = self.fetch_mexc_account(client, &key, &secret).await {
                 total_equity += state.total_equity;
                 total_pnl += state.positions.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
@@ -320,16 +285,8 @@ impl DataPoller {
         }
 
         // 5. OKX
-        let okx_keys = credentials.get(&ExchangeId::Okx)
-            .map(|c| (c.key.clone(), c.secret.clone(), c.passphrase.clone().unwrap_or_default()))
-            .or_else(|| {
-                if let (Ok(key), Ok(secret)) = (env::var("OKX_API_KEY"), env::var("OKX_API_SECRET")) {
-                    Some((key, secret, env::var("OKX_API_PASSPHRASE").unwrap_or_default()))
-                } else { None }
-            });
-
-        if let Some((key, secret, pphrase)) = okx_keys {
-            if let Ok(state) = self.fetch_okx_account(client, &key, &secret, &pphrase).await {
+        if let (Ok(key), Ok(secret), Ok(passphrase)) = (env::var("OKX_API_KEY"), env::var("OKX_API_SECRET"), env::var("OKX_API_PASSPHRASE")) {
+            if let Ok(state) = self.fetch_okx_account(client, &key, &secret, &passphrase).await {
                 total_equity += state.total_equity;
                 total_pnl += state.positions.iter().map(|p| p.unrealized_pnl).sum::<Decimal>();
                 exchange_states.insert(ExchangeId::Okx, state);
@@ -341,15 +298,16 @@ impl DataPoller {
         current_state.total_unrealized_pnl = total_pnl;
         current_state.exchange_states = exchange_states;
         current_state.asset_statuses = asset_statuses;
+        current_state.config = self.config.lock().unwrap().clone();
     }
 
-    async fn fetch_binance_account(&self, client: &reqwest::Client, key: &str, secret: &str) -> Result<crate::model::ExchangeAccountState, Box<dyn std::error::Error>> {
+    async fn fetch_binance_account(&self, key: &str, secret: &str) -> Result<crate::model::ExchangeAccountState, Box<dyn std::error::Error>> {
         let timestamp = chrono::Utc::now().timestamp_millis();
         let query = format!("timestamp={}", timestamp);
         let signature = self._hmac_signature(secret, &query);
         let url = format!("https://fapi.binance.com/fapi/v2/account?{}&signature={}", query, signature);
 
-        let resp = client.get(&url)
+        let resp = self.client.get(&url)
             .header("X-MBX-APIKEY", key)
             .send().await?;
         
@@ -382,15 +340,15 @@ impl DataPoller {
         })
     }
 
-    async fn fetch_bybit_account(&self, client: &reqwest::Client, key: &str, secret: &str) -> Result<crate::model::ExchangeAccountState, Box<dyn std::error::Error>> {
+    async fn fetch_bybit_account(&self, key: &str, secret: &str) -> Result<crate::model::ExchangeAccountState, Box<dyn std::error::Error>> {
         let timestamp = chrono::Utc::now().timestamp_millis().to_string();
+        let query_params = "accountType=UNIFIED";
         let recv_window = "5000";
-        let query = "accountType=UNIFIED";
-        let payload = format!("{}{}{}{}", timestamp, key, recv_window, query);
+        let payload = format!("{}{}{}{}", timestamp, key, recv_window, query_params);
         let signature = self._hmac_signature(secret, &payload);
 
-        let url = format!("https://api.bybit.com/v5/account/wallet-balance?{}", query);
-        let resp = client.get(&url)
+        let url = format!("https://api.bybit.com/v5/account/wallet-balance?{}", query_params);
+        let resp = self.client.get(&url)
             .header("X-BAPI-API-KEY", key)
             .header("X-BAPI-TIMESTAMP", &timestamp)
             .header("X-BAPI-RECV-WINDOW", recv_window)
@@ -403,7 +361,7 @@ impl DataPoller {
         let total_equity = Decimal::from_str(res["totalEquity"].as_str().unwrap_or("0"))?;
         let available = Decimal::from_str(res["availableBalance"].as_str().unwrap_or("0"))?;
 
-        if let Ok(pos) = self.fetch_bybit_positions(client, key, secret).await {
+        if let Ok(pos) = self.fetch_bybit_positions(key, secret).await {
             Ok(crate::model::ExchangeAccountState {
                 total_equity,
                 available_balance: available,
@@ -420,15 +378,15 @@ impl DataPoller {
         }
     }
 
-    async fn fetch_bybit_positions(&self, client: &reqwest::Client, key: &str, secret: &str) -> Result<Vec<crate::model::PositionInfo>, Box<dyn std::error::Error>> {
+    async fn fetch_bybit_positions(&self, key: &str, secret: &str) -> Result<Vec<crate::model::PositionInfo>, Box<dyn std::error::Error>> {
         let timestamp = chrono::Utc::now().timestamp_millis().to_string();
         let recv_window = "5000";
-        let query = "category=linear&settleCoin=USDT";
-        let payload = format!("{}{}{}{}", timestamp, key, recv_window, query);
+        let query_params = "category=linear&settleCoin=USDT";
+        let payload = format!("{}{}{}{}", timestamp, key, recv_window, query_params);
         let signature = self._hmac_signature(secret, &payload);
 
-        let url = format!("https://api.bybit.com/v5/position/list?{}", query);
-        let resp = client.get(&url)
+        let url = format!("https://api.bybit.com/v5/position/list?{}", query_params);
+        let resp = self.client.get(&url)
             .header("X-BAPI-API-KEY", key)
             .header("X-BAPI-TIMESTAMP", &timestamp)
             .header("X-BAPI-RECV-WINDOW", recv_window)
@@ -525,32 +483,24 @@ impl DataPoller {
         Ok(positions)
     }
 
-    async fn fetch_bitget_account(&self, client: &reqwest::Client, key: &str, secret: &str) -> Result<crate::model::ExchangeAccountState, Box<dyn std::error::Error>> {
-        let passphrase = env::var("BITGET_API_PASSPHRASE").unwrap_or_default();
+    async fn fetch_bitget_account(&self, key: &str, secret: &str) -> Result<crate::model::ExchangeAccountState, Box<dyn std::error::Error>> {
         let timestamp = chrono::Utc::now().timestamp_millis().to_string();
-        let method = "GET";
-        let request_path = "/api/v2/mix/account/accounts?productType=USDT-FUTURES";
-        let payload = format!("{}{}{}", timestamp, method, request_path);
-        let signature = self._hmac_signature(secret, &payload);
+        let url = "https://api.bitget.com/api/v2/mix/account/accounts?productType=USDT-FUTURES";
+        let signature = self._hmac_signature(secret, &format!("{}GET/api/v2/mix/account/accounts?productType=USDT-FUTURES", timestamp));
 
-        let url = format!("https://api.bitget.com{}", request_path);
-        let resp = client.get(&url)
+        let resp = self.client.get(url)
             .header("ACCESS-KEY", key)
             .header("ACCESS-SIGN", signature)
             .header("ACCESS-TIMESTAMP", &timestamp)
-            .header("ACCESS-PASSPHRASE", passphrase) 
+            .header("ACCESS-PASSPHRASE", "YOUR_PASSPHRASE") // Bitget usually needs passphrase
             .send().await?;
-
+        
         let json: serde_json::Value = resp.json().await?;
-        let data = &json["data"][0];
+        let entry = &json["data"][0];
+        let total_equity = Decimal::from_str(entry["marginBalance"].as_str().unwrap_or("0"))?;
+        let available = Decimal::from_str(entry["available"].as_str().unwrap_or("0"))?;
 
-        let total_equity = Decimal::from_str(data["marginBalance"].as_str().unwrap_or("0"))?;
-        let available = Decimal::from_str(data["available"].as_str().unwrap_or("0"))?;
-
-        let mut positions = Vec::new();
-        if let Ok(pos) = self.fetch_bitget_positions(client, key, secret).await {
-            positions = pos;
-        }
+        let positions = self.fetch_bitget_positions(key, secret).await?;
 
         Ok(crate::model::ExchangeAccountState {
             total_equity,
@@ -560,20 +510,16 @@ impl DataPoller {
         })
     }
 
-    async fn fetch_bitget_positions(&self, client: &reqwest::Client, key: &str, secret: &str) -> Result<Vec<crate::model::PositionInfo>, Box<dyn std::error::Error>> {
-        let passphrase = env::var("BITGET_API_PASSPHRASE").unwrap_or_default();
+    async fn fetch_bitget_positions(&self, key: &str, secret: &str) -> Result<Vec<crate::model::PositionInfo>, Box<dyn std::error::Error>> {
         let timestamp = chrono::Utc::now().timestamp_millis().to_string();
-        let method = "GET";
-        let request_path = "/api/v2/mix/position/all-position?productType=USDT-FUTURES";
-        let payload = format!("{}{}{}", timestamp, method, request_path);
-        let signature = self._hmac_signature(secret, &payload);
+        let url = "https://api.bitget.com/api/v2/mix/position/all-position?productType=USDT-FUTURES";
+        let signature = self._hmac_signature(secret, &format!("{}GET/api/v2/mix/position/all-position?productType=USDT-FUTURES", timestamp));
 
-        let url = format!("https://api.bitget.com{}", request_path);
-        let resp = client.get(&url)
+        let resp = self.client.get(url)
             .header("ACCESS-KEY", key)
             .header("ACCESS-SIGN", signature)
             .header("ACCESS-TIMESTAMP", &timestamp)
-            .header("ACCESS-PASSPHRASE", passphrase) 
+            .header("ACCESS-PASSPHRASE", "YOUR_PASSPHRASE") 
             .send().await?;
 
         let json: serde_json::Value = resp.json().await?;
@@ -597,35 +543,21 @@ impl DataPoller {
         Ok(positions)
     }
 
-    async fn fetch_mexc_account(&self, client: &reqwest::Client, key: &str, secret: &str) -> Result<crate::model::ExchangeAccountState, Box<dyn std::error::Error>> {
+    async fn fetch_mexc_account(&self, key: &str, secret: &str) -> Result<crate::model::ExchangeAccountState, Box<dyn std::error::Error>> {
         let timestamp = chrono::Utc::now().timestamp_millis().to_string();
         let signature = self._mexc_signature(secret, key, &timestamp, "");
+        let url = format!("https://fapi.mexc.com/api/v1/private/account/assets?timestamp={}&signature={}", timestamp, signature);
 
-        let url = "https://contract.mexc.com/api/v1/private/account/assets";
-        let resp = client.get(url)
+        let resp = self.client.get(&url)
             .header("ApiKey", key)
-            .header("Request-Time", &timestamp)
-            .header("Signature", signature)
             .send().await?;
-
+        
         let json: serde_json::Value = resp.json().await?;
-        let mut total_equity = Decimal::ZERO;
-        let mut available = Decimal::ZERO;
+        let entry = &json["data"][0];
+        let total_equity = Decimal::from_str(entry["equity"].as_str().unwrap_or("0"))?;
+        let available = Decimal::from_str(entry["available"].as_str().unwrap_or("0"))?;
 
-        if let Some(data) = json["data"].as_array() {
-            for asset in data {
-                if asset["currency"] == "USDT" {
-                    total_equity = Decimal::from_str(asset["equity"].as_str().unwrap_or("0"))?;
-                    available = Decimal::from_str(asset["availableBalance"].as_str().unwrap_or("0"))?;
-                    break;
-                }
-            }
-        }
-
-        let mut positions = Vec::new();
-        if let Ok(pos) = self.fetch_mexc_positions(client, key, secret).await {
-            positions = pos;
-        }
+        let positions = self.fetch_mexc_positions(key, secret).await?;
 
         Ok(crate::model::ExchangeAccountState {
             total_equity,
@@ -635,15 +567,13 @@ impl DataPoller {
         })
     }
 
-    async fn fetch_mexc_positions(&self, client: &reqwest::Client, key: &str, secret: &str) -> Result<Vec<crate::model::PositionInfo>, Box<dyn std::error::Error>> {
+    async fn fetch_mexc_positions(&self, key: &str, secret: &str) -> Result<Vec<crate::model::PositionInfo>, Box<dyn std::error::Error>> {
         let timestamp = chrono::Utc::now().timestamp_millis().to_string();
         let signature = self._mexc_signature(secret, key, &timestamp, "");
+        let url = format!("https://fapi.mexc.com/api/v1/private/position/open_details?timestamp={}&signature={}", timestamp, signature);
 
-        let url = "https://contract.mexc.com/api/v1/private/position/open_positions";
-        let resp = client.get(url)
+        let resp = self.client.get(&url)
             .header("ApiKey", key)
-            .header("Request-Time", &timestamp)
-            .header("Signature", signature)
             .send().await?;
 
         let json: serde_json::Value = resp.json().await?;
@@ -688,16 +618,17 @@ impl DataPoller {
         hex::encode(mac.finalize().into_bytes())
     }
 
-    async fn fetch_generic_filters(&self, client: &reqwest::Client, eid: ExchangeId) -> Result<HashMap<String, crate::model::SymbolMarketFilters>, Box<dyn std::error::Error>> {
+    async fn fetch_generic_filters(&self, eid: ExchangeId) -> Result<HashMap<String, crate::model::SymbolMarketFilters>, Box<dyn std::error::Error>> {
         let url = match eid {
-            ExchangeId::MEXC => "https://api.mexc.com/api/v1/contract/detail",
-            ExchangeId::Bitmart => "https://api-cloud-v2.bitmart.com/contract/public/details",
-            ExchangeId::Gate => "https://fx-api.gateio.ws/api/v4/futures/usdt/contracts",
+            ExchangeId::MEXC => "https://api.mexc.com/api/v3/exchangeInfo",
+            ExchangeId::Bitmart => "https://api-cloud.bitmart.com/spot/v1/symbols",
+            ExchangeId::Gate => "https://api.gateio.ws/api/v4/spot/currency_pairs",
             ExchangeId::Kraken => "https://api.kraken.com/0/public/AssetPairs",
+            ExchangeId::Ourbit => "https://api.ourbit.com/api/v1/exchangeInfo",
             _ => return Ok(HashMap::new()),
         };
 
-        let resp = client.get(url).send().await?;
+        let resp = self.client.get(url).send().await?;
         let json: serde_json::Value = resp.json().await?;
         let mut map = HashMap::new();
 
@@ -749,24 +680,25 @@ impl DataPoller {
         Ok(map)
     }
 
-    async fn fetch_binance_asset_status(&self, client: &reqwest::Client) -> Result<HashMap<String, crate::model::AssetStatus>, Box<dyn std::error::Error>> {
+    async fn fetch_binance_asset_status(&self) -> Result<HashMap<String, crate::model::AssetStatus>, Box<dyn std::error::Error>> {
         let url = "https://fapi.binance.com/fapi/v1/exchangeInfo";
-        let resp = client.get(url).send().await?;
+        let resp = self.client.get(url).send().await?;
         let _json: serde_json::Value = resp.json().await?;
         let mut map = HashMap::new();
         map.insert("USDT".to_string(), crate::model::AssetStatus { can_deposit: true, can_withdraw: true, is_active: true });
         Ok(map)
     }
 
-    async fn fetch_bybit_asset_status(&self, client: &reqwest::Client) -> Result<HashMap<String, crate::model::AssetStatus>, Box<dyn std::error::Error>> {
+    async fn fetch_bybit_asset_status(&self) -> Result<HashMap<String, crate::model::AssetStatus>, Box<dyn std::error::Error>> {
         let url = "https://api.bybit.com/v5/asset/coin/query-info?coin=USDT";
         let mut map = HashMap::new();
-        if let (Ok(key), Ok(secret)) = (env::var("BYBIT_API_KEY"), env::var("BYBIT_API_SECRET")) {
+        let secrets = self.secrets.lock().unwrap().clone();
+        if let (Some(key), Some(secret)) = (&secrets.bybit_key, &secrets.bybit_secret) {
             let timestamp = chrono::Utc::now().timestamp_millis().to_string();
             let query = "coin=USDT";
             let payload = format!("{}{}{}5000{}", timestamp, key, "5000", query);
-            let sig = self._hmac_signature(&secret, &payload);
-            let resp = client.get(url)
+            let sig = self._hmac_signature(secret, &payload);
+            let resp = self.client.get(url)
                 .header("X-BAPI-API-KEY", key)
                 .header("X-BAPI-TIMESTAMP", timestamp)
                 .header("X-BAPI-SIGN", sig)
@@ -789,9 +721,9 @@ impl DataPoller {
         Ok(map)
     }
 
-    async fn fetch_bitget_asset_status(&self, client: &reqwest::Client) -> Result<HashMap<String, crate::model::AssetStatus>, Box<dyn std::error::Error>> {
+    async fn fetch_bitget_asset_status(&self) -> Result<HashMap<String, crate::model::AssetStatus>, Box<dyn std::error::Error>> {
         let url = "https://api.bitget.com/api/spot/v1/public/currencies";
-        let resp = client.get(url).send().await?;
+        let resp = self.client.get(url).send().await?;
         let json: serde_json::Value = resp.json().await?;
         let mut map = HashMap::new();
         if let Some(data) = json["data"].as_array() {
@@ -806,14 +738,15 @@ impl DataPoller {
         Ok(map)
     }
 
-    async fn fetch_mexc_asset_status(&self, client: &reqwest::Client) -> Result<HashMap<String, crate::model::AssetStatus>, Box<dyn std::error::Error>> {
+    async fn fetch_mexc_asset_status(&self) -> Result<HashMap<String, crate::model::AssetStatus>, Box<dyn std::error::Error>> {
         let url = "https://api.mexc.com/api/v3/capital/config/getall";
         let mut map = HashMap::new();
-        if let (Ok(key), Ok(secret)) = (env::var("MEXC_API_KEY"), env::var("MEXC_API_SECRET")) {
+        let secrets = self.secrets.lock().unwrap().clone();
+        if let (Some(key), Some(secret)) = (&secrets.mexc_key, &secrets.mexc_secret) {
              let timestamp = chrono::Utc::now().timestamp_millis().to_string();
              let query = format!("timestamp={}", timestamp);
-             let sig = self._hmac_signature(&secret, &query);
-             let resp = client.get(&format!("{}?{}&signature={}", url, query, sig))
+             let sig = self._hmac_signature(secret, &query);
+             let resp = self.client.get(&format!("{}?{}&signature={}", url, query, sig))
                 .header("X-MEXC-APIKEY", key)
                 .send().await?;
              let json: serde_json::Value = resp.json().await?;
@@ -833,13 +766,13 @@ impl DataPoller {
         Ok(map)
     }
 
-    async fn fetch_okx_account(&self, client: &reqwest::Client, key: &str, secret: &str, passphrase: &str) -> Result<crate::model::ExchangeAccountState, Box<dyn std::error::Error>> {
+    async fn fetch_okx_account(&self, key: &str, secret: &str, passphrase: &str) -> Result<crate::model::ExchangeAccountState, Box<dyn std::error::Error>> {
         let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let path = "/api/v5/account/balance?ccy=USDT";
         let signature = self._okx_signature(secret, &timestamp, "GET", path, "");
 
         let url = format!("https://www.okx.com{}", path);
-        let resp = client.get(&url)
+        let resp = self.client.get(&url)
             .header("OK-ACCESS-KEY", key)
             .header("OK-ACCESS-SIGN", signature)
             .header("OK-ACCESS-TIMESTAMP", &timestamp)
@@ -863,7 +796,7 @@ impl DataPoller {
         }
 
         let mut positions = Vec::new();
-        if let Ok(pos) = self.fetch_okx_positions(client, key, secret, passphrase).await {
+        if let Ok(pos) = self.fetch_okx_positions(key, secret, passphrase).await {
             positions = pos;
         }
 
@@ -875,13 +808,13 @@ impl DataPoller {
         })
     }
 
-    async fn fetch_okx_positions(&self, client: &reqwest::Client, key: &str, secret: &str, passphrase: &str) -> Result<Vec<crate::model::PositionInfo>, Box<dyn std::error::Error>> {
+    async fn fetch_okx_positions(&self, key: &str, secret: &str, passphrase: &str) -> Result<Vec<crate::model::PositionInfo>, Box<dyn std::error::Error>> {
         let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let path = "/api/v5/account/positions?instType=SWAP"; // Perpetual swaps
         let signature = self._okx_signature(secret, &timestamp, "GET", path, "");
 
         let url = format!("https://www.okx.com{}", path);
-        let resp = client.get(&url)
+        let resp = self.client.get(&url)
             .header("OK-ACCESS-KEY", key)
             .header("OK-ACCESS-SIGN", signature)
             .header("OK-ACCESS-TIMESTAMP", &timestamp)
@@ -908,10 +841,10 @@ impl DataPoller {
         Ok(positions)
     }
 
-    async fn fetch_okx_asset_status(&self, client: &reqwest::Client) -> Result<HashMap<String, crate::model::AssetStatus>, Box<dyn std::error::Error>> {
+    async fn fetch_okx_asset_status(&self) -> Result<HashMap<String, crate::model::AssetStatus>, Box<dyn std::error::Error>> {
         // OKX public currency info
         let url = "https://www.okx.com/api/v5/public/currencies";
-        let resp = client.get(url).send().await?;
+        let resp = self.client.get(url).send().await?;
         let json: serde_json::Value = resp.json().await?;
         let mut map = HashMap::new();
         if let Some(list) = json["data"].as_array() {
@@ -939,5 +872,22 @@ impl DataPoller {
         let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
         mac.update(sign_str.as_bytes());
         general_purpose::STANDARD.encode(mac.finalize().into_bytes())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_poller_initialization() {
+        let config = Arc::new(Mutex::new(crate::config::AppConfig::default()));
+        let rate_limiter = Arc::new(RateLimiter::new());
+        let client = reqwest::Client::new();
+        let poller = DataPoller::new(rate_limiter, config, client);
+        
+        let state = poller.account_state.lock().unwrap();
+        assert_eq!(state.total_equity_usdt, Decimal::ZERO);
+        assert!(state.exchange_states.is_empty());
     }
 }
