@@ -25,7 +25,7 @@ export const useRabbitMQ = () => {
     client.onConnect = () => {
       setIsConnected(true);
       // Subscribe to all tickers
-      client.subscribe('/topic/arbit_hub.ticker.*', (message) => {
+      client.subscribe('/exchange/arbit_hub/ticker.*', (message) => {
         const ticker = JSON.parse(message.body);
         setTickers((prev) => ({
           ...prev,
@@ -34,7 +34,7 @@ export const useRabbitMQ = () => {
       });
 
       // Subscribe to account state
-      client.subscribe('/topic/arbit_hub.account.state', (message) => {
+      client.subscribe('/exchange/arbit_hub/account.state', (message) => {
         setAccountState(JSON.parse(message.body));
       });
     };
@@ -51,5 +51,14 @@ export const useRabbitMQ = () => {
     };
   }, []);
 
-  return { tickers, accountState, isConnected };
+  const sendCommand = (type, payload) => {
+    if (clientRef.current && isConnected) {
+      clientRef.current.publish({
+        destination: '/exchange/arbit_hub/commands',
+        body: JSON.stringify({ type, payload }),
+      });
+    }
+  };
+
+  return { tickers, accountState, isConnected, sendCommand };
 };

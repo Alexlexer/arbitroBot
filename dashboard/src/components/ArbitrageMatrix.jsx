@@ -1,78 +1,134 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Zap, TrendingUp, TrendingDown } from 'lucide-react';
+import { Zap, TrendingUp, TrendingDown, ArrowRight, BarChart3, Clock } from 'lucide-react';
 
 const ArbitrageMatrix = ({ tickers }) => {
-    // Group tickers by symbol
-    const symbols = [...new Set(Object.values(tickers).map(t => t.symbol))];
+    const num = (val) => {
+        if (typeof val === 'number') return val;
+        if (typeof val === 'string') return parseFloat(val) || 0;
+        return 0;
+    };
+
+    const grouped = groupBySymbol(tickers);
+    const opportunities = Object.entries(grouped)
+        .map(([symbol, exts]) => ({ symbol, ...calculateSpread(exts) }))
+        .filter(opt => opt.bestLong && opt.bestShort)
+        .sort((a, b) => b.spread - a.spread);
 
     return (
-        <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl border border-slate-800 p-6 shadow-2xl">
-            <div className="flex items-center gap-2 mb-6 text-indigo-400">
-                <Zap className="w-5 h-5 fill-indigo-400" />
-                <h2 className="text-xl font-bold tracking-tight text-white">Live Arbitrage Matrix</h2>
+        <div className="space-y-6">
+            <div className="flex items-center justify-between px-2">
+                <div className="flex items-center gap-3">
+                    <div className="p-2 bg-indigo-500/10 rounded-xl">
+                        <BarChart3 className="w-5 h-5 text-indigo-400" />
+                    </div>
+                    <div>
+                        <h2 className="text-xl font-black text-white tracking-tight uppercase">Opportunity Feed</h2>
+                        <p className="text-[10px] text-slate-500 font-bold tracking-widest uppercase">Live Spreads Across {Object.keys(tickers).length} Exchange Points</p>
+                    </div>
+                </div>
+                <div className="flex items-center gap-2 glass px-3 py-1 rounded-full border-slate-800">
+                    <Clock className="w-3 h-3 text-slate-500" />
+                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-tighter">Real-time Pulse</span>
+                </div>
             </div>
 
-            <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                    <thead>
-                        <tr className="border-b border-slate-800 text-slate-400 text-sm font-medium">
-                            <th className="pb-4 px-4">Symbol</th>
-                            <th className="pb-4 px-4">Best Long</th>
-                            <th className="pb-4 px-4">Best Short</th>
-                            <th className="pb-4 px-4 text-right">Spread %</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <AnimatePresence mode="popLayout">
-                            {Object.entries(groupBySymbol(tickers)).map(([symbol, exts]) => {
-                                const { bestLong, bestShort, spread } = calculateSpread(exts);
-                                if (!bestLong || !bestShort) return null;
+            <div className="overflow-y-auto pr-2 max-h-[calc(100vh-280px)] scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-6">
+                    <AnimatePresence mode="popLayout">
+                        {opportunities.slice(0, 4).map((opt, idx) => {
+                            const longPrice = opt.bestLong?.asks?.[0]?.[0];
+                            const shortPrice = opt.bestShort?.bids?.[0]?.[0];
 
-                                return (
-                                    <motion.tr
-                                        key={symbol}
-                                        layout
-                                        initial={{ opacity: 0, scale: 0.98 }}
-                                        animate={{ opacity: 1, scale: 1 }}
-                                        exit={{ opacity: 0, scale: 0.98 }}
-                                        className="border-b border-slate-800/50 hover:bg-white/5 transition-colors group"
-                                    >
-                                        <td className="py-4 px-4 font-mono font-bold text-white group-hover:text-indigo-400 transition-colors">
-                                            {symbol}
-                                        </td>
-                                        <td className="py-4 px-4">
-                                            <div className="text-xs text-slate-500 uppercase font-semibold">{bestLong.exchange}</div>
-                                            <div className="text-green-400 font-mono text-sm font-medium">
-                                                ${bestLong.best_ask[0].toFixed(4)}
+                            return (
+                                <motion.div
+                                    key={opt.symbol}
+                                    layout
+                                    initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                                    exit={{ opacity: 0, scale: 0.9, y: -20 }}
+                                    transition={{ duration: 0.4, delay: idx * 0.05 }}
+                                    className="group relative"
+                                >
+                                    {/* Card Glow */}
+                                    <div className={`absolute -inset-0.5 rounded-[2rem] blur opacity-0 group-hover:opacity-20 transition duration-500 ${opt.spread > 0.5 ? 'bg-emerald-500' : 'bg-indigo-500'
+                                        }`} />
+
+                                    <div className="relative glass-morphism rounded-[2rem] p-6 overflow-hidden border border-slate-800/50 hover:border-slate-700 transition-all">
+                                        {/* Side Accent */}
+                                        <div className={`absolute left-0 top-0 bottom-0 w-1.5 ${opt.spread > 0.5 ? 'bg-emerald-500' : 'bg-indigo-500'
+                                            }`} />
+
+                                        <div className="flex justify-between items-start mb-6">
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-12 h-12 rounded-2xl bg-slate-950 flex items-center justify-center border border-slate-800 group-hover:border-indigo-500/50 transition-colors">
+                                                    <span className="text-lg font-black text-white">{opt.symbol[0]}</span>
+                                                </div>
+                                                <div>
+                                                    <div className="text-xl font-black text-white tracking-tighter">{opt.symbol}</div>
+                                                    <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Market Pair</div>
+                                                </div>
                                             </div>
-                                        </td>
-                                        <td className="py-4 px-4">
-                                            <div className="text-xs text-slate-500 uppercase font-semibold">{bestShort.exchange}</div>
-                                            <div className="text-red-400 font-mono text-sm font-medium">
-                                                ${bestShort.best_bid[0].toFixed(4)}
-                                            </div>
-                                        </td>
-                                        <td className="py-4 px-4 text-right">
-                                            <div className={`inline-flex items-center gap-1 rounded-full px-3 py-1 font-mono text-sm font-bold ${spread > 0 ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                                            <div className={`px-4 py-2 rounded-2xl font-black font-mono text-lg flex flex-col items-end ${opt.spread > 0 ? 'text-emerald-400 bg-emerald-500/10' : 'text-rose-400 bg-rose-500/10'
                                                 }`}>
-                                                {spread > 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                                                {spread.toFixed(2)}%
+                                                <div className="flex items-center gap-1">
+                                                    {opt.spread > 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                                                    {opt.spread.toFixed(2)}%
+                                                </div>
+                                                <span className="text-[9px] uppercase tracking-tighter opacity-50">Gross Spread</span>
                                             </div>
-                                        </td>
-                                    </motion.tr>
-                                );
-                            })}
-                        </AnimatePresence>
-                    </tbody>
-                </table>
+                                        </div>
+
+                                        <div className="grid grid-cols-7 gap-2 items-center">
+                                            <div className="col-span-3 bg-slate-950/50 rounded-2xl p-3 border border-slate-900">
+                                                <div className="text-[9px] font-black text-slate-500 uppercase mb-1 flex items-center gap-1">
+                                                    <div className="w-1 h-1 rounded-full bg-emerald-500" /> BUY AT
+                                                </div>
+                                                <div className="text-xs font-bold text-slate-300 mb-1 truncate">{opt.bestLong.exchange}</div>
+                                                <div className="text-lg font-black text-white font-mono tracking-tighter">${num(longPrice).toFixed(4)}</div>
+                                            </div>
+
+                                            <div className="col-span-1 flex justify-center">
+                                                <div className="w-8 h-8 rounded-full bg-slate-800/50 flex items-center justify-center">
+                                                    <ArrowRight className="w-4 h-4 text-slate-500 group-hover:text-indigo-400 transition-colors" />
+                                                </div>
+                                            </div>
+
+                                            <div className="col-span-3 bg-slate-950/50 rounded-2xl p-3 border border-slate-900 text-right">
+                                                <div className="text-[9px] font-black text-slate-500 uppercase mb-1 flex items-center gap-1 justify-end">
+                                                    SELL AT <div className="w-1 h-1 rounded-full bg-rose-500" />
+                                                </div>
+                                                <div className="text-xs font-bold text-slate-300 mb-1 truncate">{opt.bestShort.exchange}</div>
+                                                <div className="text-lg font-black text-white font-mono tracking-tighter">${num(shortPrice).toFixed(4)}</div>
+                                            </div>
+                                        </div>
+
+                                        {/* Progress Bar Mini */}
+                                        <div className="mt-6 flex items-center gap-3">
+                                            <Zap className="w-3 h-3 text-amber-500 animate-pulse" />
+                                            <div className="flex-1 h-1 bg-slate-800 rounded-full overflow-hidden">
+                                                <motion.div
+                                                    initial={{ width: 0 }}
+                                                    animate={{ width: `${Math.min(100, opt.spread * 100)}%` }}
+                                                    className="h-full bg-gradient-to-r from-indigo-500 to-emerald-500"
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                </motion.div>
+                            );
+                        })}
+                    </AnimatePresence>
+                </div>
             </div>
         </div>
     );
 };
 
 const groupBySymbol = (tickers) => {
+    if (!tickers) return {};
     return Object.values(tickers).reduce((acc, t) => {
+        if (!t || !t.symbol) return acc;
         if (!acc[t.symbol]) acc[t.symbol] = [];
         acc[t.symbol].push(t);
         return acc;
@@ -80,14 +136,37 @@ const groupBySymbol = (tickers) => {
 };
 
 const calculateSpread = (exchanges) => {
-    if (exchanges.length < 2) return { bestLong: null, bestShort: null, spread: 0 };
+    const num = (val) => {
+        if (typeof val === 'number') return val;
+        if (typeof val === 'string') return parseFloat(val) || 0;
+        return 0;
+    };
 
-    const bestLong = exchanges.reduce((a, b) => a.best_ask[0] < b.best_ask[0] ? a : b);
-    const bestShort = exchanges.reduce((a, b) => a.best_bid[0] > b.best_bid[0] ? a : b);
+    // Filter out exchanges that don't have valid bid/ask data or are muted (like MEXC)
+    const validExchanges = exchanges.filter(ex =>
+        ex.exchange !== 'MEXC' && // Mute MEXC for now
+        ex.asks && ex.asks.length > 0 && Array.isArray(ex.asks[0]) &&
+        ex.bids && ex.bids.length > 0 && Array.isArray(ex.bids[0])
+    );
 
-    const spread = ((bestShort.best_bid[0] - bestLong.best_ask[0]) / bestLong.best_ask[0]) * 100;
+    if (validExchanges.length < 2) return { bestLong: null, bestShort: null, spread: 0 };
 
-    return { bestLong, bestShort, spread };
+    try {
+        const bestLong = validExchanges.reduce((a, b) => num(a.asks[0][0]) < num(b.asks[0][0]) ? a : b);
+        const bestShort = validExchanges.reduce((a, b) => num(b.bids[0][0]) > num(a.bids[0][0]) ? b : a);
+
+        const askPrice = num(bestLong?.asks?.[0]?.[0]);
+        const bidPrice = num(bestShort?.bids?.[0]?.[0]);
+
+        if (askPrice === 0) return { bestLong: null, bestShort: null, spread: 0 };
+
+        const spread = ((bidPrice - askPrice) / askPrice) * 100;
+
+        return { bestLong, bestShort, spread };
+    } catch (e) {
+        console.error("Spread calculation error:", e);
+        return { bestLong: null, bestShort: null, spread: 0 };
+    }
 };
 
 export default ArbitrageMatrix;

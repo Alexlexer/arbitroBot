@@ -1,7 +1,14 @@
 {
-  "margin_threshold_low": "0.4",
-  "margin_threshold_high": "0.7",
-  "concentration_threshold": "0.7",
-  "target_margin_ratio": "0.2",
-  "polling_interval_ms": 5000
+    "margin_threshold_low": "0.4",
+    "margin_threshold_high": "0.7",
+    "concentration_threshold": "0.7",
+    "target_margin_ratio": "0.2",
+    "polling_interval_ms": 5000,
+    "automated_rebalance_enabled": false,
+    "wallets": {
+        "Binance": "YOUR_BINANCE_USDT_ADDRESS",
+        "Bybit": "YOUR_BYBIT_USDT_ADDRESS",
+        "MEXC": "YOUR_MEXC_USDT_ADDRESS",
+        "Okx": "YOUR_OKX_USDT_ADDRESS"
+    }
 }

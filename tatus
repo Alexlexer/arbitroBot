@@ -1,0 +1,25 @@
+  feature/deb-packaging[m
+  feature/documentation[m
+  feature/git-workflow-rule[m
+  feature/github-actions-build[m
+  feature/phase3-min-notional-guard-v2[m
+  feature/phase3-rate-limiter[m
+  feature/phase3-telegram-auth-5pct[m
+  feature/phase3-timestamp-drift-v3[m
+  feature/phase3-trading-status-v2[m
+* [32mfeature/phase4-equity-monitor[m
+  fix/github-actions-v4[m
+  main[m
+  [31mremotes/origin/HEAD[m -> origin/feature/phase3-telegram-auth-5pct
+  [31mremotes/origin/feature/binance-depth-vwap[m
+  [31mremotes/origin/feature/bitmart-depth-vwap[m
+  [31mremotes/origin/feature/deb-packaging[m
+  [31mremotes/origin/feature/documentation[m
+  [31mremotes/origin/feature/github-actions-build[m
+  [31mremotes/origin/feature/mexc-depth-vwap[m
+  [31mremotes/origin/feature/phase3-min-notional-guard-v2[m
+  [31mremotes/origin/feature/phase3-rate-limiter[m
+  [31mremotes/origin/feature/phase3-telegram-auth-5pct[m
+  [31mremotes/origin/feature/phase4-equity-monitor[m
+  [31mremotes/origin/fix/github-actions-v4[m
+  [31mremotes/origin/main[m

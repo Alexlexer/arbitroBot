@@ -10,6 +10,7 @@ mod rate_limiter;
 mod rebalance_advisor;
 mod config;
 mod messaging;
+mod transfers;
 
 use aggregator::Aggregator;
 use execution::ExecutionActor;
@@ -25,6 +26,7 @@ async fn main() {
 
     // Load Configuration
     let config = config::AppConfig::load();
+    let secrets = config::SecretsConfig::load();
 
     // Initialize Messaging (RabbitMQ)
     let messaging = messaging::init_messaging().await;
@@ -36,14 +38,18 @@ async fn main() {
     logger.init().unwrap(); // Set as global logger
 
     // Setup Risk, Poller, Notifier & RateLimiter
-    let risk_manager = risk_manager::RiskManager::new();
+    let config_arc = Arc::new(std::sync::Mutex::new(config.clone()));
+    let secrets_arc = Arc::new(std::sync::Mutex::new(secrets.clone()));
+    
+    let risk_manager = risk_manager::RiskManager::new(config_arc.clone(), secrets_arc.clone());
     let rebalance_advisor = rebalance_advisor::RebalanceAdvisor::new(&config);
     let rate_limiter = Arc::new(RateLimiter::new());
-    let poller = poller::DataPoller::new(rate_limiter.clone());
+    let client = reqwest::Client::new();
+    let poller = poller::DataPoller::new(rate_limiter.clone(), config_arc.clone(), secrets_arc.clone(), client);
     let funding_rates = poller.funding_rates.clone();
     let market_filters = poller.market_filters.clone();
     let account_state = poller.account_state.clone();
-    let notifier = Arc::new(notifier::TelegramNotifier::new(account_state.clone()));
+    let notifier = Arc::new(notifier::TelegramNotifier::new(account_state.clone(), config_arc.clone(), secrets_arc.clone()));
     
     // Spawn Data Pollers
     let poller_handle = Arc::new(poller);
@@ -77,6 +83,16 @@ async fn main() {
 
     // Run Aggregator (Main Thread)
     let account_state = poller_handle.account_state.clone();
-    let mut aggregator = Aggregator::new(rx, exec_tx, log_buffer, risk_manager, rebalance_advisor, funding_rates, market_filters, account_state, notifier, messaging);
+    let mut aggregator = Aggregator::new(rx, exec_tx, log_buffer, risk_manager, rebalance_advisor, funding_rates, market_filters, account_state, notifier, messaging.clone());
+    
+    // Start Command Consumer
+    {
+        let msg = messaging.lock().await;
+        if let Some(client) = msg.as_ref() {
+            let consumer = aggregator.get_command_consumer();
+            let _ = client.consume("arbit_hub_commands", "commands", consumer).await;
+        }
+    }
+
     aggregator.run().await;
 }

@@ -131,6 +131,8 @@ pub struct GlobalAccountState {
     pub total_unrealized_pnl: Decimal,
     pub exchange_states: HashMap<ExchangeId, ExchangeAccountState>,
     pub asset_statuses: HashMap<ExchangeId, HashMap<String, AssetStatus>>,
+    pub config: crate::config::AppConfig,
+    pub secrets: crate::config::SecretsConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -151,6 +153,15 @@ pub struct RebalanceAdvice {
     pub amount_usdt: Decimal, // Recommended transfer
     pub reason: String,
 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload")]
+pub enum BotCommand {
+    UpdateConfig(crate::config::AppConfig),
+    UpdateSecrets(crate::config::SecretsConfig),
+    EmergencyStop,
+    Resume,
+}
+
 pub fn normalize_symbol(s: &str) -> String {
     s.to_uppercase()
         .replace("XBT", "BTC")
