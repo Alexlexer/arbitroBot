@@ -89,6 +89,8 @@ services:
       - RabbitMq__Host=rabbitmq
       - RabbitMq__Port=5672
       - History__BaseUrl=http://arbitro-bot:8080
+      - Auth__InviteCode=${INVITE_CODE:-arbit2024}
+      - Jwt__Key=${JWT_KEY:-arbit_hub_jwt_secret_key_change_in_production_32chars}
     depends_on:
       postgres:
         condition: service_healthy

@@ -50,8 +50,8 @@ export function calculateSpread(exchanges, botConfig) {
 
   const spread = ((shortPrice - longPrice) / longPrice) * 100;
 
-  const threshold = botConfig?.min_spread_threshold || 0;
-  if (spread < threshold) return { bestLong: null, bestShort: null, spread: 0 };
+  // Display threshold is always 0 — the bot's min_spread_threshold is for TRADING, not display
+  // if (spread < threshold) return { bestLong: null, bestShort: null, spread: 0 };
 
   if (Math.abs(spread) > 50) return { bestLong: null, bestShort: null, spread: 0 };
 

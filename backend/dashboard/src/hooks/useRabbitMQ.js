@@ -144,18 +144,22 @@ export const useRabbitMQ = () => {
     client.onConnect = () => {
       if (isDev) console.log('Connected to WebStomp');
       setIsConnected(true);
-      // Subscribe to all tickers
-      client.subscribe('/topic/arbit_hub.ticker.*', (message) => {
-        const ticker = JSON.parse(message.body);
-        setTickers((prev) => ({
-          ...prev,
-          [`${ticker.exchange}-${ticker.symbol}`]: ticker,
-        }));
+      // Subscribe to all tickers — bot publishes to arbit_hub exchange with key ticker.{Exchange}
+      client.subscribe('/exchange/arbit_hub/ticker.*', (message) => {
+        try {
+          const ticker = JSON.parse(message.body);
+          if (!ticker?.symbol || !ticker?.exchange) return;
+          const key = `${ticker.exchange}-${ticker.symbol}`;
+          tickerBatchRef.current[key] = ticker;
+          if (!batchTimerRef.current) {
+            batchTimerRef.current = setInterval(flushTickerBatch, TICKER_BATCH_MS);
+          }
+        } catch { /* ignore malformed */ }
       });
 
       // Subscribe to account state
-      client.subscribe('/topic/arbit_hub.account.state', (message) => {
-        setAccountState(JSON.parse(message.body));
+      client.subscribe('/exchange/arbit_hub/account.state', (message) => {
+        try { setAccountState(JSON.parse(message.body)); } catch { }
       });
 
       client.subscribe('/exchange/arbit_hub/bot.config', (message) => {
@@ -206,5 +210,5 @@ export const useRabbitMQ = () => {
     };
   }, []);
 
-  return { tickers, accountState, isConnected };
+  return { tickers, accountState, botConfig, listenerAlert, listenerOpportunity, isConnected, sendBotCommand };
 };

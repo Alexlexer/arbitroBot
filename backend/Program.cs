@@ -103,7 +103,6 @@ builder.Services.AddHttpClient<HistoryProxyService>(client =>
     client.BaseAddress = new Uri(baseUrl);
     client.Timeout = TimeSpan.FromSeconds(15);
 });
-builder.Services.AddSingleton<HistoryProxyService>();
 
 // ── Build & configure pipeline ────────────────────────────────────────────────
 var app = builder.Build();
