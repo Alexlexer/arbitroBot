@@ -95,6 +95,20 @@ const SettingsPanel = ({ config, secrets, sendCommand }) => {
                         </div>
                     </div>
 
+                        {/* Live trading toggle */}
+                        <div className="flex items-center justify-between p-4 rounded-xl bg-white/5 border border-white/10">
+                            <div>
+                                <div className="text-sm font-bold text-white">Live Trading</div>
+                                <div className="text-[10px] text-zinc-600 mt-0.5">Send real orders to exchanges</div>
+                            </div>
+                            <button
+                                onClick={() => handleChange('live_trading_enabled', !localConfig.live_trading_enabled)}
+                                className={`relative w-12 h-6 rounded-full transition-colors ${localConfig.live_trading_enabled ? 'bg-white' : 'bg-white/10'}`}
+                            >
+                                <span className={`absolute top-1 w-4 h-4 rounded-full transition-all ${localConfig.live_trading_enabled ? 'left-7 bg-black' : 'left-1 bg-zinc-500'}`} />
+                            </button>
+                        </div>
+
                     <button onClick={handleSaveConfig} className="w-full py-3 rounded-xl bg-white text-black text-xs font-bold uppercase tracking-widest hover:bg-zinc-200 transition-colors flex items-center justify-center gap-2">
                         <Save className="w-3.5 h-3.5" /> Save Config
                     </button>

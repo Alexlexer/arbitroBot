@@ -399,9 +399,30 @@ impl Aggregator {
                     *c = config;
                     info!("COMMAND: Full config updated");
                 }
-                BotCommand::UpdateSecrets(_secrets) => {
-                    // This would need to update the secrets in the secrets config
-                    info!("COMMAND: Secrets update received (not implemented)");
+                BotCommand::UpdateSecrets(new_secrets) => {
+                    use crate::config::ExchangeCredentials;
+                    use crate::model::ExchangeId;
+                    macro_rules! add_key {
+                        ($ex:expr, $key:expr, $sec:expr, $pass:expr) => {
+                            if let (Some(k), Some(s)) = ($key.clone(), $sec.clone()) {
+                                if !k.is_empty() {
+                                    c.api_keys.insert($ex, ExchangeCredentials { key: k, secret: s, passphrase: $pass });
+                                }
+                            }
+                        };
+                    }
+                    add_key!(ExchangeId::Binance,    new_secrets.binance_key,  new_secrets.binance_secret,  None);
+                    add_key!(ExchangeId::Bybit,      new_secrets.bybit_key,    new_secrets.bybit_secret,    None);
+                    add_key!(ExchangeId::Bitget,     new_secrets.bitget_key,   new_secrets.bitget_secret,   new_secrets.bitget_passphrase.clone());
+                    add_key!(ExchangeId::MEXC,       new_secrets.mexc_key,     new_secrets.mexc_secret,     None);
+                    add_key!(ExchangeId::Okx,        new_secrets.okx_key,      new_secrets.okx_secret,      new_secrets.okx_passphrase.clone());
+                    add_key!(ExchangeId::Gate,       new_secrets.gate_key,     new_secrets.gate_secret,     None);
+                    add_key!(ExchangeId::Bitmart,    new_secrets.bitmart_key,  new_secrets.bitmart_secret,  new_secrets.bitmart_memo.clone());
+                    add_key!(ExchangeId::Kraken,     new_secrets.kraken_key,   new_secrets.kraken_secret,   None);
+                    if let Err(e) = new_secrets.save() {
+                        error!("Failed to save secrets: {}", e);
+                    }
+                    info!("COMMAND: Secrets updated for {} exchanges", c.api_keys.len());
                 }
                 BotCommand::EmergencyStop => {
                     info!("COMMAND: Emergency stop received");

@@ -45,6 +45,8 @@ pub struct AppConfig {
     pub target_margin_ratio: Decimal,
     pub polling_interval_ms: u64,
     pub automated_rebalance_enabled: bool,
+    #[serde(default)]
+    pub live_trading_enabled: bool,
     pub wallets: HashMap<ExchangeId, String>,
     /// Per-exchange endpoint and tuning overrides.  Absent keys use launcher defaults.
     #[serde(default)]
@@ -160,6 +162,7 @@ impl AppConfig {
             target_margin_ratio: Decimal::new(2, 1),
             polling_interval_ms: 5000,
             automated_rebalance_enabled: false,
+            live_trading_enabled: false,
             wallets: HashMap::new(),
             exchange_endpoints,
         }
@@ -185,6 +188,14 @@ pub struct SecretsConfig {
     pub okx_key: Option<String>,
     pub okx_secret: Option<String>,
     pub okx_passphrase: Option<String>,
+    pub bitget_passphrase: Option<String>,
+    pub gate_key: Option<String>,
+    pub gate_secret: Option<String>,
+    pub bitmart_key: Option<String>,
+    pub bitmart_secret: Option<String>,
+    pub bitmart_memo: Option<String>,
+    pub kraken_key: Option<String>,
+    pub kraken_secret: Option<String>,
     pub telegram_token: Option<String>,
     pub telegram_chat_id: Option<String>,
 }
