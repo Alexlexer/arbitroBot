@@ -1,4 +1,5 @@
 use super::Exchange;
+use crate::config::ExchangeEndpointConfig;
 use crate::model::{ExchangeId, UnifiedTicker};
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -10,7 +11,27 @@ use tokio::sync::mpsc::Sender;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use url::Url;
 
-pub struct BitgetLauncher;
+pub struct BitgetLauncher {
+    ws_url: String,
+    rest_url: String,
+    max_symbols: usize,
+    sub_batch_size: usize,
+    sub_batch_delay_ms: u64,
+    ping_interval_secs: u64,
+}
+
+impl BitgetLauncher {
+    pub fn new(ep: &ExchangeEndpointConfig) -> Self {
+        Self {
+            ws_url: ep.ws_url.clone().unwrap_or_else(|| "wss://ws.bitget.com/v2/ws/public".into()),
+            rest_url: ep.rest_url.clone().unwrap_or_else(|| "https://api.bitget.com".into()),
+            max_symbols: ep.max_symbols.unwrap_or(120),
+            sub_batch_size: ep.sub_batch_size.unwrap_or(40),
+            sub_batch_delay_ms: ep.sub_batch_delay_ms.unwrap_or(80),
+            ping_interval_secs: ep.ping_interval_secs.unwrap_or(25),
+        }
+    }
+}
 
 #[async_trait]
 impl Exchange for BitgetLauncher {
@@ -19,18 +40,23 @@ impl Exchange for BitgetLauncher {
         tx: Sender<UnifiedTicker>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let tx_clone = tx.clone();
+        let ws_url = self.ws_url.clone();
+        let rest_url = self.rest_url.clone();
+        let max_symbols = self.max_symbols;
+        let sub_batch_size = self.sub_batch_size;
+        let sub_batch_delay_ms = self.sub_batch_delay_ms;
+        let ping_interval_secs = self.ping_interval_secs;
 
         tokio::spawn(async move {
-            let url = Url::parse("wss://ws.bitget.com/v2/ws/public")
-                .expect("Invalid Bitget WebSocket URL");
+            let url = Url::parse(&ws_url).expect("Invalid Bitget WebSocket URL");
             let mut reconnect_attempt: u32 = 0;
-            // Dynamic Fetch
             let client = reqwest::Client::new();
             let mut symbols = Vec::new();
             for attempt in 1..=5 {
                 info!("Fetching active trading pairs from Bitget API (attempt {})...", attempt);
                 symbols.clear();
-                match client.get("https://api.bitget.com/api/v2/mix/market/contracts?productType=USDT-FUTURES").send().await {
+                let fetch_url = format!("{}/api/v2/mix/market/contracts?productType=USDT-FUTURES", rest_url);
+                match client.get(&fetch_url).send().await {
                     Ok(resp) => {
                         if let Ok(json) = resp.json::<serde_json::Value>().await {
                             if let Some(data) = json.get("data").and_then(|d| d.as_array()) {
@@ -45,16 +71,14 @@ impl Exchange for BitgetLauncher {
                     }
                     Err(e) => error!("Failed to fetch Bitget pairs: {}", e),
                 }
-                if !symbols.is_empty() {
-                    break;
-                }
+                if !symbols.is_empty() { break; }
                 if attempt < 5 {
                     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 }
             }
             info!("Bitget: Discovered {} active USDT pairs.", symbols.len());
-            if symbols.len() > 120 {
-                symbols.truncate(120);
+            if symbols.len() > max_symbols {
+                symbols.truncate(max_symbols);
             }
 
             loop {
@@ -65,8 +89,7 @@ impl Exchange for BitgetLauncher {
                         info!("Connected to Bitget.");
                         let (mut write, mut read) = ws_stream.split();
 
-                        // Subscribe in batches of 40
-                        for chunk in symbols.chunks(40) {
+                        for chunk in symbols.chunks(sub_batch_size) {
                             let args: Vec<_> = chunk.iter().map(|s| {
                                 json!({
                                     "instType": "USDT-FUTURES",
@@ -79,20 +102,18 @@ impl Exchange for BitgetLauncher {
                                 error!("Failed to subscribe Bitget batch: {}", e);
                                 break;
                             }
-                            tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
+                            tokio::time::sleep(tokio::time::Duration::from_millis(sub_batch_delay_ms)).await;
                         }
 
-                         // Ping loop
                         let mut write_ping = write;
                         tokio::spawn(async move {
                             loop {
-                                tokio::time::sleep(tokio::time::Duration::from_secs(25)).await;
+                                tokio::time::sleep(tokio::time::Duration::from_secs(ping_interval_secs)).await;
                                 if write_ping.send(Message::Text("ping".to_string())).await.is_err() {
                                     break;
                                 }
                             }
                         });
-
 
                         let mut bitget_logged_unparseable = false;
                         while let Some(msg) = read.next().await {
@@ -108,9 +129,7 @@ impl Exchange for BitgetLauncher {
                                         for item in data.iter() {
                                             if let Some(inner) = item.as_array() {
                                                 for book in inner.iter() {
-                                                    if book.is_object() {
-                                                        books.push(book);
-                                                    }
+                                                    if book.is_object() { books.push(book); }
                                                 }
                                             } else if item.is_object() {
                                                 books.push(item);

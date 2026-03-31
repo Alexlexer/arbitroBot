@@ -44,13 +44,13 @@ const ArbitrageMatrix = ({ tickers }) => {
                                         <td className="py-4 px-4">
                                             <div className="text-xs text-slate-500 uppercase font-semibold">{bestLong.exchange}</div>
                                             <div className="text-green-400 font-mono text-sm font-medium">
-                                                ${bestLong.best_ask[0].toFixed(4)}
+                                                ${bestLong.asks?.[0]?.[0]?.toFixed(4) ?? '—'}
                                             </div>
                                         </td>
                                         <td className="py-4 px-4">
                                             <div className="text-xs text-slate-500 uppercase font-semibold">{bestShort.exchange}</div>
                                             <div className="text-red-400 font-mono text-sm font-medium">
-                                                ${bestShort.best_bid[0].toFixed(4)}
+                                                ${bestShort.bids?.[0]?.[0]?.toFixed(4) ?? '—'}
                                             </div>
                                         </td>
                                         <td className="py-4 px-4 text-right">
@@ -82,10 +82,13 @@ const groupBySymbol = (tickers) => {
 const calculateSpread = (exchanges) => {
     if (exchanges.length < 2) return { bestLong: null, bestShort: null, spread: 0 };
 
-    const bestLong = exchanges.reduce((a, b) => a.best_ask[0] < b.best_ask[0] ? a : b);
-    const bestShort = exchanges.reduce((a, b) => a.best_bid[0] > b.best_bid[0] ? a : b);
+    const valid = exchanges.filter(t => t.asks?.[0]?.[0] != null && t.bids?.[0]?.[0] != null);
+    if (valid.length < 2) return { bestLong: null, bestShort: null, spread: 0 };
 
-    const spread = ((bestShort.best_bid[0] - bestLong.best_ask[0]) / bestLong.best_ask[0]) * 100;
+    const bestLong = valid.reduce((a, b) => a.asks[0][0] < b.asks[0][0] ? a : b);
+    const bestShort = valid.reduce((a, b) => a.bids[0][0] > b.bids[0][0] ? a : b);
+
+    const spread = ((bestShort.bids[0][0] - bestLong.asks[0][0]) / bestLong.asks[0][0]) * 100;
 
     return { bestLong, bestShort, spread };
 };

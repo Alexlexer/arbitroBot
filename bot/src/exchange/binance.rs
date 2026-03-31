@@ -1,21 +1,32 @@
 use super::Exchange;
+use crate::config::ExchangeEndpointConfig;
 use crate::model::{ExchangeId, UnifiedTicker};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use log::{error, info};
 use rust_decimal::Decimal;
 use serde::Deserialize;
-
 use std::str::FromStr;
 use tokio::sync::mpsc::Sender;
 use tokio::time::Duration;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use url::Url;
 
-pub struct BinanceLauncher;
+pub struct BinanceLauncher {
+    ws_url: String,
+    rest_url: String,
+    max_symbols: usize,
+}
 
-/// Max symbols in one combined stream URL (URL length limit ~2048).
-const BINANCE_DEPTH_SYMBOLS_LIMIT: usize = 120;
+impl BinanceLauncher {
+    pub fn new(ep: &ExchangeEndpointConfig) -> Self {
+        Self {
+            ws_url: ep.ws_url.clone().unwrap_or_else(|| "wss://fstream.binance.com/stream".into()),
+            rest_url: ep.rest_url.clone().unwrap_or_else(|| "https://fapi.binance.com".into()),
+            max_symbols: ep.max_symbols.unwrap_or(120),
+        }
+    }
+}
 
 #[async_trait]
 impl Exchange for BinanceLauncher {
@@ -24,22 +35,21 @@ impl Exchange for BinanceLauncher {
         tx: Sender<UnifiedTicker>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let tx_clone = tx.clone();
+        let ws_base = self.ws_url.clone();
+        let rest_url = self.rest_url.clone();
+        let max_symbols = self.max_symbols;
 
         tokio::spawn(async move {
             let mut reconnect_attempt: u32 = 0;
 
-            // Fetch perpetual USDT symbols from Binance Futures
-            let symbols = match fetch_binance_perpetual_symbols().await {
+            let symbols = match fetch_binance_perpetual_symbols(&rest_url).await {
                 Ok(s) => s,
                 Err(e) => {
                     error!("Binance: failed to fetch symbols: {}", e);
                     vec![]
                 }
             };
-            let symbols: Vec<String> = symbols
-                .into_iter()
-                .take(BINANCE_DEPTH_SYMBOLS_LIMIT)
-                .collect();
+            let symbols: Vec<String> = symbols.into_iter().take(max_symbols).collect();
             info!("Binance: subscribing to depth5 for {} symbols", symbols.len());
 
             let stream_path = symbols
@@ -47,10 +57,7 @@ impl Exchange for BinanceLauncher {
                 .map(|s| format!("{}@depth5@100ms", s.to_lowercase()))
                 .collect::<Vec<_>>()
                 .join("/");
-            let url_str = format!(
-                "wss://fstream.binance.com/stream?streams={}",
-                stream_path
-            );
+            let url_str = format!("{}?streams={}", ws_base, stream_path);
             let url = match Url::parse(&url_str) {
                 Ok(u) => u,
                 Err(e) => {
@@ -103,12 +110,12 @@ impl Exchange for BinanceLauncher {
     }
 }
 
-async fn fetch_binance_perpetual_symbols() -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+async fn fetch_binance_perpetual_symbols(
+    rest_url: &str,
+) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
     let client = reqwest::Client::new();
-    let resp = client
-        .get("https://fapi.binance.com/fapi/v1/exchangeInfo")
-        .send()
-        .await?;
+    let url = format!("{}/fapi/v1/exchangeInfo", rest_url);
+    let resp = client.get(&url).send().await?;
     let json: serde_json::Value = resp.json().await?;
     let list = json
         .get("symbols")
@@ -126,7 +133,6 @@ async fn fetch_binance_perpetual_symbols() -> Result<Vec<String>, Box<dyn std::e
     Ok(symbols)
 }
 
-/// Combined stream wrapper: {"stream":"btcusdt@depth5@100ms","data":{...}}
 #[derive(Deserialize)]
 struct BinanceCombinedMessage {
     data: BinanceDepthUpdate,

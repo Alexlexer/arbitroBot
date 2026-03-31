@@ -144,7 +144,8 @@ async fn main() {
     });
 
     // Run Exchange Launchers
-    exchange::launch_all(tx).await;
+    let config_snap = config.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    exchange::launch_all(tx, &config_snap).await;
 
     // Run Execution Actor (Background Thread)
     let mut execution_actor = ExecutionActor::new(exec_rx, rate_limiter.clone(), config.clone());

@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use crate::config::ExchangeEndpointConfig;
 use crate::exchange::Exchange;
 use crate::model::{ExchangeId, UnifiedTicker};
 use rust_decimal::Decimal;
@@ -7,12 +8,23 @@ use log::{info, error};
 use std::str::FromStr;
 use serde::Deserialize;
 
-pub struct BitmartLauncher;
+pub struct BitmartLauncher {
+    rest_url: String,
+    max_symbols: usize,
+    depth_delay_ms: u64,
+    cycle_sleep_ms: u64,
+}
 
-const BITMART_DEPTH_SYMBOLS_LIMIT: usize = 120;
-const BITMART_DEPTH_DELAY_MS: u64 = 200;
-const BITMART_CYCLE_SLEEP_SECS: u64 = 2;
-const BITMART_FUTURES_BASE: &str = "https://api-cloud-v2.bitmart.com/contract/public";
+impl BitmartLauncher {
+    pub fn new(ep: &ExchangeEndpointConfig) -> Self {
+        Self {
+            rest_url: ep.rest_url.clone().unwrap_or_else(|| "https://api-cloud-v2.bitmart.com/contract/public".into()),
+            max_symbols: ep.max_symbols.unwrap_or(120),
+            depth_delay_ms: ep.sub_batch_delay_ms.unwrap_or(200),
+            cycle_sleep_ms: ep.poll_interval_ms.unwrap_or(2000),
+        }
+    }
+}
 
 #[async_trait]
 impl Exchange for BitmartLauncher {
@@ -20,21 +32,25 @@ impl Exchange for BitmartLauncher {
         info!("Connecting to Bitmart Futures Market Data (REST depth)...");
         let client = reqwest::Client::new();
         let tx_clone = tx.clone();
+        let rest_url = self.rest_url.clone();
+        let max_symbols = self.max_symbols;
+        let depth_delay_ms = self.depth_delay_ms;
+        let cycle_sleep_ms = self.cycle_sleep_ms;
 
         tokio::spawn(async move {
-            let symbols = match fetch_bitmart_futures_symbols(&client).await {
+            let symbols = match fetch_bitmart_futures_symbols(&client, &rest_url).await {
                 Ok(s) => s,
                 Err(e) => {
                     error!("Bitmart: failed to fetch futures contracts: {}", e);
                     vec![]
                 }
             };
-            let symbols: Vec<String> = symbols.into_iter().take(BITMART_DEPTH_SYMBOLS_LIMIT).collect();
+            let symbols: Vec<String> = symbols.into_iter().take(max_symbols).collect();
             info!("Bitmart: polling futures depth for {} contracts", symbols.len());
 
             loop {
                 for sym in &symbols {
-                    match fetch_bitmart_futures_depth(&client, sym).await {
+                    match fetch_bitmart_futures_depth(&client, &rest_url, sym).await {
                         Ok(Some(ticker)) => {
                             if tx_clone.send(ticker).await.is_err() {
                                 error!("Bitmart: channel closed");
@@ -44,9 +60,9 @@ impl Exchange for BitmartLauncher {
                         Ok(None) => {}
                         Err(e) => error!("Bitmart futures depth {}: {}", sym, e),
                     }
-                    tokio::time::sleep(tokio::time::Duration::from_millis(BITMART_DEPTH_DELAY_MS)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(depth_delay_ms)).await;
                 }
-                tokio::time::sleep(tokio::time::Duration::from_secs(BITMART_CYCLE_SLEEP_SECS)).await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(cycle_sleep_ms)).await;
             }
         });
         Ok(())
@@ -56,8 +72,8 @@ impl Exchange for BitmartLauncher {
     }
 }
 
-async fn fetch_bitmart_futures_symbols(client: &reqwest::Client) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
-    let url = format!("{}/details", BITMART_FUTURES_BASE);
+async fn fetch_bitmart_futures_symbols(client: &reqwest::Client, rest_url: &str) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+    let url = format!("{}/details", rest_url);
     let json: serde_json::Value = client.get(&url).send().await?.json().await?;
     if json["code"].as_i64() != Some(1000) {
         return Err("Bitmart details non-OK".into());
@@ -99,8 +115,8 @@ struct BitmartFuturesDepthResponse {
     data: Option<BitmartFuturesDepthData>,
 }
 
-async fn fetch_bitmart_futures_depth(client: &reqwest::Client, symbol: &str) -> Result<Option<UnifiedTicker>, Box<dyn std::error::Error + Send + Sync>> {
-    let url = format!("{}/depth?symbol={}", BITMART_FUTURES_BASE, symbol);
+async fn fetch_bitmart_futures_depth(client: &reqwest::Client, rest_url: &str, symbol: &str) -> Result<Option<UnifiedTicker>, Box<dyn std::error::Error + Send + Sync>> {
+    let url = format!("{}/depth?symbol={}", rest_url, symbol);
     let resp: BitmartFuturesDepthResponse = client.get(&url).send().await?.json().await?;
     if resp.code != 1000 {
         return Ok(None);

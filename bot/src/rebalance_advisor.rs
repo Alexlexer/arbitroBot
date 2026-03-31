@@ -181,13 +181,14 @@ mod tests {
             enabled_exchanges,
             api_keys: HashMap::new(),
             taker_fee_overrides: HashMap::new(),
-            margin_threshold_low: Decimal::new(4, 1),  // 40%
-            margin_threshold_high: Decimal::new(7, 1), // 70%
-            concentration_threshold: Decimal::new(7, 1), // 70%
-            target_margin_ratio: Decimal::new(2, 1),   // 20%
+            margin_threshold_low: Decimal::new(4, 1),
+            margin_threshold_high: Decimal::new(7, 1),
+            concentration_threshold: Decimal::new(7, 1),
+            target_margin_ratio: Decimal::new(2, 1),
             polling_interval_ms: 5000,
             automated_rebalance_enabled: false,
             wallets: HashMap::new(),
+            exchange_endpoints: HashMap::new(),
         }
     }
 

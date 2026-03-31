@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use tokio::sync::mpsc::Sender;
-use crate::model::UnifiedTicker;
+use crate::model::{ExchangeId, UnifiedTicker};
+use crate::config::{AppConfig, ExchangeEndpointConfig};
 
 pub mod binance;
 pub mod bybit;
@@ -9,6 +10,9 @@ pub mod mexc;
 pub mod bitmart;
 pub mod kraken;
 pub mod gate;
+pub mod hyperliquid;
+pub mod aster;
+pub mod lighter;
 
 /// Exponential backoff delay for WebSocket reconnection (secs). Caps at 120s.
 pub fn reconnect_delay_secs(attempt: u32) -> u64 {
@@ -22,75 +26,63 @@ pub trait Exchange: Send + Sync {
     async fn subscribe(&mut self, symbols: &[String]) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 }
 
-pub async fn launch_all(tx: Sender<UnifiedTicker>) {
+/// Snapshot endpoint config for a given exchange, falling back to an empty default.
+fn ep(config: &AppConfig, id: ExchangeId) -> ExchangeEndpointConfig {
+    config.exchange_endpoints.get(&id).cloned().unwrap_or_default()
+}
+
+pub async fn launch_all(tx: Sender<UnifiedTicker>, config: &AppConfig) {
     use crate::exchange::binance::BinanceLauncher;
     use crate::exchange::bybit::BybitLauncher;
     use crate::exchange::bitget::BitgetLauncher;
     use crate::exchange::mexc::MexcLauncher;
     use crate::exchange::bitmart::BitmartLauncher;
     use crate::exchange::kraken::KrakenLauncher;
-    use crate::exchange::Exchange;
+    use crate::exchange::hyperliquid::HyperliquidLauncher;
+    use crate::exchange::aster::AsterLauncher;
+    use crate::exchange::lighter::LighterLauncher;
 
-    // Binance
-    let tx_binance = tx.clone();
-    tokio::spawn(async move {
-        let mut binance = BinanceLauncher;
-        if let Err(e) = binance.connect(tx_binance).await {
-            log::error!("Binance launch failed: {}", e);
-        }
-    });
+    // Returns true if the exchange is enabled (absent key defaults to enabled).
+    let enabled = |id: ExchangeId| -> bool {
+        config.enabled_exchanges.get(&id).copied().unwrap_or(true)
+    };
 
-    // Bybit
-    let tx_bybit = tx.clone();
-    tokio::spawn(async move {
-        let mut bybit = BybitLauncher;
-        if let Err(e) = bybit.connect(tx_bybit).await {
-            log::error!("Bybit launch failed: {}", e);
-        }
-    });
+    macro_rules! spawn_launcher {
+        ($id:expr, $launcher:expr, $tx:expr, $name:literal) => {{
+            if enabled($id) {
+                let tx_clone = $tx.clone();
+                let mut launcher = $launcher;
+                tokio::spawn(async move {
+                    if let Err(e) = launcher.connect(tx_clone).await {
+                        log::error!("{} launch failed: {}", $name, e);
+                    }
+                });
+            } else {
+                log::info!("{} is disabled in config — skipping launch.", $name);
+            }
+        }};
+    }
 
-    // Bitget
-    let tx_bitget = tx.clone();
-    tokio::spawn(async move {
-        let mut bitget = BitgetLauncher;
-        if let Err(e) = bitget.connect(tx_bitget).await {
-            log::error!("Bitget launch failed: {}", e);
-        }
-    });
+    spawn_launcher!(ExchangeId::Binance,     BinanceLauncher::new(&ep(config, ExchangeId::Binance)),     tx, "Binance");
+    spawn_launcher!(ExchangeId::Bybit,       BybitLauncher::new(&ep(config, ExchangeId::Bybit)),         tx, "Bybit");
+    spawn_launcher!(ExchangeId::Bitget,      BitgetLauncher::new(&ep(config, ExchangeId::Bitget)),       tx, "Bitget");
+    spawn_launcher!(ExchangeId::MEXC,        MexcLauncher::new(&ep(config, ExchangeId::MEXC)),           tx, "MEXC");
+    spawn_launcher!(ExchangeId::Bitmart,     BitmartLauncher::new(&ep(config, ExchangeId::Bitmart)),     tx, "Bitmart");
+    spawn_launcher!(ExchangeId::Kraken,      KrakenLauncher::new(&ep(config, ExchangeId::Kraken)),       tx, "Kraken");
 
-    // MEXC
-    let tx_mexc = tx.clone();
-    tokio::spawn(async move {
-        let mut mexc = MexcLauncher;
-        if let Err(e) = mexc.connect(tx_mexc).await {
-            log::error!("MEXC launch failed: {}", e);
-        }
-    });
+    if enabled(ExchangeId::Gate) {
+        let tx_gate = tx.clone();
+        let mut gate = crate::exchange::gate::GateLauncher::new(&ep(config, ExchangeId::Gate));
+        tokio::spawn(async move {
+            if let Err(e) = gate.connect(tx_gate).await {
+                log::error!("Gate launch failed: {}", e);
+            }
+        });
+    } else {
+        log::info!("Gate is disabled in config — skipping launch.");
+    }
 
-    // Bitmart
-    let tx_bitmart = tx.clone();
-    tokio::spawn(async move {
-        let mut bitmart = BitmartLauncher;
-        if let Err(e) = bitmart.connect(tx_bitmart).await {
-            log::error!("Bitmart launch failed: {}", e);
-        }
-    });
-
-    // Kraken
-    let tx_kraken = tx.clone();
-    tokio::spawn(async move {
-        let mut kraken = KrakenLauncher;
-        if let Err(e) = kraken.connect(tx_kraken).await {
-            log::error!("Kraken launch failed: {}", e);
-        }
-    });
-
-    // Gate.io
-    let tx_gate = tx.clone();
-    tokio::spawn(async move {
-        let mut gate = crate::exchange::gate::GateLauncher;
-        if let Err(e) = gate.connect(tx_gate).await {
-            log::error!("Gate launch failed: {}", e);
-        }
-    });
+    spawn_launcher!(ExchangeId::Hyperliquid, HyperliquidLauncher::new(&ep(config, ExchangeId::Hyperliquid)), tx, "Hyperliquid");
+    spawn_launcher!(ExchangeId::Aster,       AsterLauncher::new(&ep(config, ExchangeId::Aster)),             tx, "Aster");
+    spawn_launcher!(ExchangeId::Lighter,     LighterLauncher::new(&ep(config, ExchangeId::Lighter)),         tx, "Lighter");
 }

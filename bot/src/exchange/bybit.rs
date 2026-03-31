@@ -1,4 +1,5 @@
 use super::Exchange;
+use crate::config::ExchangeEndpointConfig;
 use crate::model::{ExchangeId, UnifiedTicker};
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -10,7 +11,25 @@ use tokio::sync::mpsc::Sender;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use url::Url;
 
-pub struct BybitLauncher;
+pub struct BybitLauncher {
+    ws_url: String,
+    rest_url: String,
+    max_symbols: usize,
+    sub_batch_size: usize,
+    sub_batch_delay_ms: u64,
+}
+
+impl BybitLauncher {
+    pub fn new(ep: &ExchangeEndpointConfig) -> Self {
+        Self {
+            ws_url: ep.ws_url.clone().unwrap_or_else(|| "wss://stream.bybit.com/v5/public/linear".into()),
+            rest_url: ep.rest_url.clone().unwrap_or_else(|| "https://api.bybit.com".into()),
+            max_symbols: ep.max_symbols.unwrap_or(120),
+            sub_batch_size: ep.sub_batch_size.unwrap_or(50),
+            sub_batch_delay_ms: ep.sub_batch_delay_ms.unwrap_or(100),
+        }
+    }
+}
 
 #[async_trait]
 impl Exchange for BybitLauncher {
@@ -19,12 +38,15 @@ impl Exchange for BybitLauncher {
         tx: Sender<UnifiedTicker>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let tx_clone = tx.clone();
-        
+        let ws_url = self.ws_url.clone();
+        let rest_url = self.rest_url.clone();
+        let max_symbols = self.max_symbols;
+        let sub_batch_size = self.sub_batch_size;
+        let sub_batch_delay_ms = self.sub_batch_delay_ms;
+
         tokio::spawn(async move {
-            let url = Url::parse("wss://stream.bybit.com/v5/public/linear")
-                .expect("Invalid Bybit WebSocket URL");
+            let url = Url::parse(&ws_url).expect("Invalid Bybit WebSocket URL");
             let mut reconnect_attempt: u32 = 0;
-            // Dynamic Fetch
             let client = reqwest::Client::new();
             let mut symbols = Vec::new();
             for attempt in 1..=5 {
@@ -32,12 +54,12 @@ impl Exchange for BybitLauncher {
                 let mut cursor = String::new();
                 symbols.clear();
                 loop {
-                    let url = if cursor.is_empty() {
-                        "https://api.bybit.com/v5/market/instruments-info?category=linear&limit=1000&status=Trading".to_string()
+                    let fetch_url = if cursor.is_empty() {
+                        format!("{}/v5/market/instruments-info?category=linear&limit=1000&status=Trading", rest_url)
                     } else {
-                        format!("https://api.bybit.com/v5/market/instruments-info?category=linear&limit=1000&status=Trading&cursor={}", cursor)
+                        format!("{}/v5/market/instruments-info?category=linear&limit=1000&status=Trading&cursor={}", rest_url, cursor)
                     };
-                    match client.get(&url).send().await {
+                    match client.get(&fetch_url).send().await {
                         Ok(resp) => {
                             if let Ok(json) = resp.json::<serde_json::Value>().await {
                                 if let Some(list) = json["result"]["list"].as_array() {
@@ -61,16 +83,14 @@ impl Exchange for BybitLauncher {
                     }
                     break;
                 }
-                if !symbols.is_empty() {
-                    break;
-                }
+                if !symbols.is_empty() { break; }
                 if attempt < 5 {
                     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 }
             }
             info!("Bybit: Discovered {} active USDT pairs.", symbols.len());
-            if symbols.len() > 120 {
-                symbols.truncate(120);
+            if symbols.len() > max_symbols {
+                symbols.truncate(max_symbols);
             }
 
             loop {
@@ -81,18 +101,16 @@ impl Exchange for BybitLauncher {
                         info!("Connected to Bybit.");
                         let (mut write, mut read) = ws_stream.split();
 
-                        // Subscribe in batches of 50 (Bybit may limit args per message)
-                        for chunk in symbols.chunks(50) {
+                        for chunk in symbols.chunks(sub_batch_size) {
                             let args: Vec<String> = chunk.iter().map(|s| format!("orderbook.50.{}", s)).collect();
                             let sub_msg = json!({ "op": "subscribe", "args": args });
                             if let Err(e) = write.send(Message::Text(sub_msg.to_string())).await {
                                 error!("Failed to subscribe Bybit batch: {}", e);
                                 break;
                             }
-                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                            tokio::time::sleep(tokio::time::Duration::from_millis(sub_batch_delay_ms)).await;
                         }
 
-                        // Ping loop
                         let mut write_ping = write;
                         tokio::spawn(async move {
                             loop {
@@ -109,7 +127,7 @@ impl Exchange for BybitLauncher {
                             if let Ok(Message::Text(text)) = msg {
                                 if let Ok(raw) = serde_json::from_str::<serde_json::Value>(&text) {
                                     if raw.get("success").and_then(|s| s.as_bool()) == Some(true) {
-                                        continue; // subscription ack
+                                        continue;
                                     }
                                     let topic = raw.get("topic").and_then(|t| t.as_str()).unwrap_or("");
                                     let data = match raw.get("data") {

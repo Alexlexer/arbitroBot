@@ -416,7 +416,8 @@ impl ExecutionActor {
         let body_str = body_json.to_string();
 
         let timestamp = chrono::Utc::now().timestamp_millis().to_string();
-        let sign_str = format!("{}{}{}", key, &timestamp, "");
+        // MEXC signature: API_KEY + timestamp + request body
+        let sign_str = format!("{}{}{}", key, &timestamp, body_str);
         let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC key size");
         mac.update(sign_str.as_bytes());
         let signature = hex::encode(mac.finalize().into_bytes());

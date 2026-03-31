@@ -1,4 +1,5 @@
 use super::Exchange;
+use crate::config::ExchangeEndpointConfig;
 use crate::model::{ExchangeId, UnifiedTicker};
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -10,13 +11,25 @@ use tokio::sync::mpsc::Sender;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use url::Url;
 
-pub struct MexcLauncher;
+pub struct MexcLauncher {
+    ws_url: String,
+    rest_url: String,
+    max_symbols: usize,
+    sub_batch_size: usize,
+    ping_interval_secs: u64,
+}
 
-const MEXC_DEPTH_SYMBOLS_LIMIT: usize = 120;
-const MEXC_WS_URL: &str = "wss://contract.mexc.com/edge";
-const MEXC_FUTURES_BASE: &str = "https://contract.mexc.com/api/v1/contract";
-const MEXC_SUB_BATCH_SIZE: usize = 20;
-const MEXC_PING_INTERVAL_SECS: u64 = 20;
+impl MexcLauncher {
+    pub fn new(ep: &ExchangeEndpointConfig) -> Self {
+        Self {
+            ws_url: ep.ws_url.clone().unwrap_or_else(|| "wss://contract.mexc.com/edge".into()),
+            rest_url: ep.rest_url.clone().unwrap_or_else(|| "https://contract.mexc.com".into()),
+            max_symbols: ep.max_symbols.unwrap_or(120),
+            sub_batch_size: ep.sub_batch_size.unwrap_or(20),
+            ping_interval_secs: ep.ping_interval_secs.unwrap_or(20),
+        }
+    }
+}
 
 #[async_trait]
 impl Exchange for MexcLauncher {
@@ -25,27 +38,26 @@ impl Exchange for MexcLauncher {
         tx: Sender<UnifiedTicker>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let tx_clone = tx.clone();
+        let ws_url = self.ws_url.clone();
+        let rest_url = self.rest_url.clone();
+        let max_symbols = self.max_symbols;
+        let sub_batch_size = self.sub_batch_size;
+        let ping_interval_secs = self.ping_interval_secs;
 
         tokio::spawn(async move {
-            let url = Url::parse(MEXC_WS_URL).expect("Invalid MEXC WebSocket URL");
+            let url = Url::parse(&ws_url).expect("Invalid MEXC WebSocket URL");
             let mut reconnect_attempt: u32 = 0;
 
             let client = reqwest::Client::new();
-            let symbols = match fetch_mexc_futures_contracts(&client).await {
+            let symbols = match fetch_mexc_futures_contracts(&client, &rest_url).await {
                 Ok(s) => s,
                 Err(e) => {
                     error!("MEXC: failed to fetch futures contracts: {}", e);
                     vec![]
                 }
             };
-            let symbols: Vec<String> = symbols
-                .into_iter()
-                .take(MEXC_DEPTH_SYMBOLS_LIMIT)
-                .collect();
-            info!(
-                "MEXC: subscribing to depth.full for {} contracts via WebSocket",
-                symbols.len()
-            );
+            let symbols: Vec<String> = symbols.into_iter().take(max_symbols).collect();
+            info!("MEXC: subscribing to depth.full for {} contracts via WebSocket", symbols.len());
 
             loop {
                 info!("Connecting to MEXC Contract WebSocket...");
@@ -55,15 +67,13 @@ impl Exchange for MexcLauncher {
                         info!("Connected to MEXC Contract WebSocket.");
                         let (mut write, mut read) = ws_stream.split();
 
-                        for chunk in symbols.chunks(MEXC_SUB_BATCH_SIZE) {
+                        for chunk in symbols.chunks(sub_batch_size) {
                             for sym in chunk {
                                 let sub_msg = json!({
                                     "method": "sub.depth.full",
                                     "param": { "symbol": sym, "limit": 5 }
                                 });
-                                if let Err(e) =
-                                    write.send(Message::Text(sub_msg.to_string())).await
-                                {
+                                if let Err(e) = write.send(Message::Text(sub_msg.to_string())).await {
                                     error!("MEXC: failed to subscribe {}: {}", sym, e);
                                     break;
                                 }
@@ -74,16 +84,9 @@ impl Exchange for MexcLauncher {
                         let mut write_ping = write;
                         tokio::spawn(async move {
                             loop {
-                                tokio::time::sleep(tokio::time::Duration::from_secs(
-                                    MEXC_PING_INTERVAL_SECS,
-                                ))
-                                .await;
+                                tokio::time::sleep(tokio::time::Duration::from_secs(ping_interval_secs)).await;
                                 let ping = json!({"method": "ping"});
-                                if write_ping
-                                    .send(Message::Text(ping.to_string()))
-                                    .await
-                                    .is_err()
-                                {
+                                if write_ping.send(Message::Text(ping.to_string())).await.is_err() {
                                     break;
                                 }
                             }
@@ -91,23 +94,12 @@ impl Exchange for MexcLauncher {
 
                         while let Some(msg) = read.next().await {
                             if let Ok(Message::Text(text)) = msg {
-                                if let Ok(raw) =
-                                    serde_json::from_str::<serde_json::Value>(&text)
-                                {
-                                    let channel =
-                                        raw.get("channel").and_then(|c| c.as_str()).unwrap_or("");
-
-                                    if channel == "pong"
-                                        || channel == "rs.sub.depth.full"
-                                        || raw.get("channel").is_none()
-                                    {
+                                if let Ok(raw) = serde_json::from_str::<serde_json::Value>(&text) {
+                                    let channel = raw.get("channel").and_then(|c| c.as_str()).unwrap_or("");
+                                    if channel == "pong" || channel == "rs.sub.depth.full" || raw.get("channel").is_none() {
                                         continue;
                                     }
-
-                                    if channel != "push.depth.full" {
-                                        continue;
-                                    }
-
+                                    if channel != "push.depth.full" { continue; }
                                     if let Some(ticker) = parse_mexc_depth_push(&raw) {
                                         if tx_clone.send(ticker).await.is_err() {
                                             error!("MEXC: channel closed");
@@ -142,8 +134,9 @@ impl Exchange for MexcLauncher {
 
 async fn fetch_mexc_futures_contracts(
     client: &reqwest::Client,
+    rest_url: &str,
 ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
-    let url = format!("{}/detail", MEXC_FUTURES_BASE);
+    let url = format!("{}/api/v1/contract/detail", rest_url);
     let json: serde_json::Value = client.get(&url).send().await?.json().await?;
     let data = json.get("data").ok_or("missing data")?;
     let symbols: Vec<String> = if let Some(arr) = data.as_array() {

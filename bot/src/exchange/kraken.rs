@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use crate::config::ExchangeEndpointConfig;
 use crate::exchange::Exchange;
 use crate::model::{ExchangeId, UnifiedTicker};
 use rust_decimal::Decimal;
@@ -6,11 +7,21 @@ use tokio::sync::mpsc::Sender;
 use log::{info, error};
 use std::str::FromStr;
 
-pub struct KrakenLauncher;
+pub struct KrakenLauncher {
+    rest_url: String,
+    max_symbols: usize,
+    cycle_sleep_ms: u64,
+}
 
-const KRAKEN_FUTURES_BASE: &str = "https://futures.kraken.com/derivatives/api/v3";
-const KRAKEN_DEPTH_PAIRS_LIMIT: usize = 120;
-const KRAKEN_CYCLE_SLEEP_SECS: u64 = 2;
+impl KrakenLauncher {
+    pub fn new(ep: &ExchangeEndpointConfig) -> Self {
+        Self {
+            rest_url: ep.rest_url.clone().unwrap_or_else(|| "https://futures.kraken.com/derivatives/api/v3".into()),
+            max_symbols: ep.max_symbols.unwrap_or(120),
+            cycle_sleep_ms: ep.poll_interval_ms.unwrap_or(2000),
+        }
+    }
+}
 
 #[async_trait]
 impl Exchange for KrakenLauncher {
@@ -18,25 +29,22 @@ impl Exchange for KrakenLauncher {
         info!("Connecting to Kraken Futures Market Data (REST depth)...");
         let client = reqwest::Client::new();
         let tx_clone = tx.clone();
+        let rest_url = self.rest_url.clone();
+        let max_symbols = self.max_symbols;
+        let cycle_sleep_ms = self.cycle_sleep_ms;
 
         tokio::spawn(async move {
-            let symbols = match fetch_kraken_symbols(&client).await {
+            let symbols = match fetch_kraken_symbols(&client, &rest_url).await {
                 Ok(s) if !s.is_empty() => s,
-                Ok(_) => {
-                    error!("Kraken Futures instruments returned 0 symbols");
-                    vec![]
-                }
-                Err(e) => {
-                    error!("Kraken Futures instruments: {}", e);
-                    vec![]
-                }
+                Ok(_) => { error!("Kraken Futures instruments returned 0 symbols"); vec![] }
+                Err(e) => { error!("Kraken Futures instruments: {}", e); vec![] }
             };
-            let symbols: Vec<String> = symbols.into_iter().take(KRAKEN_DEPTH_PAIRS_LIMIT).collect();
+            let symbols: Vec<String> = symbols.into_iter().take(max_symbols).collect();
             info!("Kraken Futures: polling orderbook for {} symbols", symbols.len());
             loop {
                 let mut sent = 0usize;
                 for sym in &symbols {
-                    match fetch_kraken_orderbook_one(&client, sym).await {
+                    match fetch_kraken_orderbook_one(&client, &rest_url, sym).await {
                         Ok(Some((bids, asks))) => {
                             let clean = sym.strip_prefix("pf_").unwrap_or(sym).strip_prefix("fi_").unwrap_or(sym);
                             let _ = tx_clone.send(UnifiedTicker {
@@ -60,7 +68,7 @@ impl Exchange for KrakenLauncher {
                 if sent > 0 {
                     info!("Kraken Futures: sent orderbook for {} contracts", sent);
                 }
-                tokio::time::sleep(tokio::time::Duration::from_secs(KRAKEN_CYCLE_SLEEP_SECS)).await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(cycle_sleep_ms)).await;
             }
         });
 
@@ -71,19 +79,10 @@ impl Exchange for KrakenLauncher {
     }
 }
 
-/// Kraken Futures GET /orderbook returns order books for all contracts.
-/// Response: { "orderBook": { "symbol": { "bids": [[price, qty]], "asks": [[price, qty]] }, ... } }
-/// or { "orderBook": [ { "symbol": "...", "bids": [], "asks": [] }, ... ] }
 fn level_to_str(v: &serde_json::Value) -> Option<String> {
-    if let Some(s) = v.as_str() {
-        return Some(s.to_string());
-    }
-    if let Some(n) = v.as_f64() {
-        return Some(n.to_string());
-    }
-    if let Some(n) = v.as_i64() {
-        return Some(n.to_string());
-    }
+    if let Some(s) = v.as_str() { return Some(s.to_string()); }
+    if let Some(n) = v.as_f64() { return Some(n.to_string()); }
+    if let Some(n) = v.as_i64() { return Some(n.to_string()); }
     None
 }
 
@@ -96,9 +95,7 @@ fn parse_orderbook_value(book: &serde_json::Value) -> Option<(Vec<(Decimal, Deci
         if arr.len() >= 2 {
             if let (Some(ps), Some(qs)) = (level_to_str(&arr[0]), level_to_str(&arr[1])) {
                 if let (Ok(price), Ok(size)) = (Decimal::from_str(&ps), Decimal::from_str(&qs)) {
-                    if price > Decimal::ZERO && size > Decimal::ZERO {
-                        bids.push((price, size));
-                    }
+                    if price > Decimal::ZERO && size > Decimal::ZERO { bids.push((price, size)); }
                 }
             }
         }
@@ -109,22 +106,17 @@ fn parse_orderbook_value(book: &serde_json::Value) -> Option<(Vec<(Decimal, Deci
         if arr.len() >= 2 {
             if let (Some(ps), Some(qs)) = (level_to_str(&arr[0]), level_to_str(&arr[1])) {
                 if let (Ok(price), Ok(size)) = (Decimal::from_str(&ps), Decimal::from_str(&qs)) {
-                    if price > Decimal::ZERO && size > Decimal::ZERO {
-                        asks.push((price, size));
-                    }
+                    if price > Decimal::ZERO && size > Decimal::ZERO { asks.push((price, size)); }
                 }
             }
         }
     }
-    if bids.is_empty() || asks.is_empty() {
-        return None;
-    }
+    if bids.is_empty() || asks.is_empty() { return None; }
     Some((bids, asks))
 }
 
-/// Fetch tradeable symbols from /instruments (prefer pf_* perp).
-async fn fetch_kraken_symbols(client: &reqwest::Client) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
-    let url = format!("{}/instruments", KRAKEN_FUTURES_BASE);
+async fn fetch_kraken_symbols(client: &reqwest::Client, rest_url: &str) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+    let url = format!("{}/instruments", rest_url);
     let json: serde_json::Value = client.get(&url).send().await?.json().await?;
     if json.get("result").and_then(|r| r.as_str()) != Some("success") {
         return Err("Kraken instruments error".into());
@@ -135,22 +127,16 @@ async fn fetch_kraken_symbols(client: &reqwest::Client) -> Result<Vec<String>, B
         .filter_map(|i| {
             let sym = i.get("symbol").and_then(|s| s.as_str())?;
             let tradeable = i.get("tradeable").and_then(|t| t.as_bool()).unwrap_or(false);
-            let ok = tradeable
-                && (sym.starts_with("pf_") || sym.starts_with("fi_") || sym.starts_with("PI_") || sym.starts_with("FI_"));
-            if ok {
-                Some(sym.to_string())
-            } else {
-                None
-            }
+            let ok = tradeable && (sym.starts_with("pf_") || sym.starts_with("fi_") || sym.starts_with("PI_") || sym.starts_with("FI_"));
+            if ok { Some(sym.to_string()) } else { None }
         })
         .collect();
     symbols.sort();
     Ok(symbols)
 }
 
-/// GET /orderbook?symbol=X returns { "result": "success", "orderBook": { "bids": [...], "asks": [...] } }.
-async fn fetch_kraken_orderbook_one(client: &reqwest::Client, symbol: &str) -> Result<Option<(Vec<(Decimal, Decimal)>, Vec<(Decimal, Decimal)>)>, Box<dyn std::error::Error + Send + Sync>> {
-    let url = format!("{}/orderbook?symbol={}", KRAKEN_FUTURES_BASE, symbol);
+async fn fetch_kraken_orderbook_one(client: &reqwest::Client, rest_url: &str, symbol: &str) -> Result<Option<(Vec<(Decimal, Decimal)>, Vec<(Decimal, Decimal)>)>, Box<dyn std::error::Error + Send + Sync>> {
+    let url = format!("{}/orderbook?symbol={}", rest_url, symbol);
     let json: serde_json::Value = client.get(&url).send().await?.json().await?;
     if json.get("result").and_then(|r| r.as_str()) != Some("success") {
         return Ok(None);

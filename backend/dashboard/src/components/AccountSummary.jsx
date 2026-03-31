@@ -37,7 +37,7 @@ const AccountSummary = ({ state, isConnected }) => {
                         </div>
                     </div>
                 </div>
-            </motion.div>
+            </div>
 
             {/* Exchange Breakdown */}
             <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl border border-slate-800 p-6">
