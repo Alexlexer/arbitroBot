@@ -196,6 +196,7 @@ pub struct SecretsConfig {
     pub bitmart_memo: Option<String>,
     pub kraken_key: Option<String>,
     pub kraken_secret: Option<String>,
+    pub hyperliquid_private_key: Option<String>,
     pub telegram_token: Option<String>,
     pub telegram_chat_id: Option<String>,
 }

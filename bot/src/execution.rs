@@ -3,11 +3,41 @@ use crate::model::{ArbitrageOpportunity, ExchangeId, TradeRecord, TradeStatus};
 use crate::rate_limiter::RateLimiter;
 use hmac::{Hmac, Mac};
 use sha2::{Sha256, Sha512, Digest};
+use sha3::Keccak256;
 use log::{error, info, warn};
 use rust_decimal::Decimal;
 use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
 use tokio::time::{sleep, Duration};
+
+// ── Hyperliquid msgpack order structs ─────────────────────────────────────────
+#[derive(serde::Serialize)]
+struct HlOrderAction {
+    #[serde(rename = "type")]
+    type_: &'static str,
+    orders: Vec<HlOrder>,
+    grouping: &'static str,
+}
+
+#[derive(serde::Serialize)]
+struct HlOrder {
+    a: u32,
+    b: bool,
+    p: String,
+    s: String,
+    r: bool,
+    t: HlOrderTif,
+}
+
+#[derive(serde::Serialize)]
+struct HlOrderTif {
+    limit: HlLimitTif,
+}
+
+#[derive(serde::Serialize)]
+struct HlLimitTif {
+    tif: String,
+}
 
 type HmacSha256 = Hmac<Sha256>;
 type HmacSha512 = Hmac<Sha512>;
@@ -163,6 +193,10 @@ impl ExecutionActor {
                 let s = std::env::var("KRAKEN_API_SECRET").ok()?;
                 Some((k, s, String::new()))
             }
+            ExchangeId::Hyperliquid => {
+                let pk = std::env::var("HYPERLIQUID_PRIVATE_KEY").ok()?;
+                Some((pk.clone(), pk, String::new()))
+            }
             _ => None,
         }
     }
@@ -186,7 +220,8 @@ impl ExecutionActor {
             ExchangeId::Okx       => self.place_okx_futures(&creds.0, &creds.1, &creds.2, &opp.symbol, side, volume_usdt, price).await,
             ExchangeId::Gate      => self.place_gate_futures(&creds.0, &creds.1, &opp.symbol, side, volume_usdt, price).await,
             ExchangeId::Bitmart   => self.place_bitmart_futures(&creds.0, &creds.1, &creds.2, &opp.symbol, side, volume_usdt, price).await,
-            ExchangeId::Kraken    => self.place_kraken_futures(&creds.0, &creds.1, &opp.symbol, side, volume_usdt, price).await,
+            ExchangeId::Kraken       => self.place_kraken_futures(&creds.0, &creds.1, &opp.symbol, side, volume_usdt, price).await,
+            ExchangeId::Hyperliquid  => self.place_hyperliquid_perp(&creds.0, &opp.symbol, side, volume_usdt, price).await,
             other => Err(format!("Live execution not implemented for {:?}", other)),
         }
     }
@@ -555,5 +590,166 @@ impl ExecutionActor {
             "DOT"  => "PF_DOTUSD".to_string(),
             other  => format!("PF_{}USD", other),
         }
+    }
+
+    // ── Hyperliquid USDT Perpetual ─────────────────────────────────────────────
+    // Auth: EIP-712 signed with secp256k1 wallet private key.
+    // Action hash = keccak256(msgpack(action) + nonce_8be + 0x00).
+    // Final hash = EIP-712 over Agent{source="a", connectionId=action_hash}.
+
+    async fn place_hyperliquid_perp(
+        &self,
+        private_key: &str,
+        symbol: &str,
+        side: &str,
+        volume_usdt: Decimal,
+        price: Decimal,
+    ) -> Result<(), String> {
+        use k256::ecdsa::SigningKey;
+
+        let client = reqwest::Client::new();
+        let coin = symbol
+            .trim_end_matches("USDT")
+            .trim_end_matches("-PERP")
+            .to_uppercase();
+
+        // 1. Fetch meta to get asset index and szDecimals
+        let meta: serde_json::Value = client
+            .post("https://api.hyperliquid.xyz/info")
+            .json(&serde_json::json!({"type": "meta"}))
+            .send().await.map_err(|e| format!("HL meta: {}", e))?
+            .json().await.map_err(|e| format!("HL meta parse: {}", e))?;
+
+        let universe = meta["universe"].as_array()
+            .ok_or("HL: no universe in meta")?;
+
+        let (asset_idx, sz_decimals) = universe.iter().enumerate()
+            .find_map(|(i, v)| {
+                if v["name"].as_str() == Some(coin.as_str()) {
+                    let sz = v["szDecimals"].as_u64().unwrap_or(4) as usize;
+                    Some((i as u32, sz))
+                } else { None }
+            })
+            .ok_or_else(|| format!("HL: {} not in universe", coin))?;
+
+        let is_buy = side == "BUY";
+
+        // 2. Price with small slippage so IOC fills
+        let adj_price = if is_buy {
+            price * Decimal::new(1005, 3)
+        } else {
+            price * Decimal::new(995, 3)
+        };
+        let size = (volume_usdt / adj_price).round_dp(sz_decimals as u32);
+        if size.is_zero() { return Err("HL: qty zero".into()); }
+
+        let price_str = format!("{:.2}", adj_price);
+        let size_str  = format!("{:.prec$}", size, prec = sz_decimals);
+
+        // 3. Build msgpack-encodable action
+        let action = HlOrderAction {
+            type_: "order",
+            orders: vec![HlOrder {
+                a: asset_idx,
+                b: is_buy,
+                p: price_str,
+                s: size_str,
+                r: false,
+                t: HlOrderTif { limit: HlLimitTif { tif: "Ioc".into() } },
+            }],
+            grouping: "na",
+        };
+
+        // 4. Compute connection_id = keccak256(msgpack(action) + nonce_8be + 0x00)
+        let nonce = chrono::Utc::now().timestamp_millis() as u64;
+        let mut hash_input = rmp_serde::to_vec_named(&action)
+            .map_err(|e| format!("HL msgpack: {}", e))?;
+        hash_input.extend_from_slice(&nonce.to_be_bytes());
+        hash_input.push(0x00);
+
+        use sha3::Digest as _;
+        let connection_id: [u8; 32] = Keccak256::digest(&hash_input).into();
+
+        // 5. EIP-712 domain separator
+        // keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)")
+        let domain_type_hash: [u8; 32] = Keccak256::digest(
+            b"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+        ).into();
+        let name_hash:    [u8; 32] = Keccak256::digest(b"Exchange").into();
+        let version_hash: [u8; 32] = Keccak256::digest(b"1").into();
+        let mut chain_id = [0u8; 32];
+        chain_id[30] = 0x05; // 1337 = 0x0539
+        chain_id[31] = 0x39;
+
+        let mut domain_enc = Vec::with_capacity(160);
+        domain_enc.extend_from_slice(&domain_type_hash);
+        domain_enc.extend_from_slice(&name_hash);
+        domain_enc.extend_from_slice(&version_hash);
+        domain_enc.extend_from_slice(&chain_id);
+        domain_enc.extend_from_slice(&[0u8; 32]); // verifyingContract = 0x0
+        let domain_sep: [u8; 32] = Keccak256::digest(&domain_enc).into();
+
+        // 6. Agent struct hash
+        // keccak256("Agent(string source,bytes32 connectionId)")
+        let agent_type_hash: [u8; 32] = Keccak256::digest(
+            b"Agent(string source,bytes32 connectionId)"
+        ).into();
+        let source_hash: [u8; 32] = Keccak256::digest(b"a").into(); // "a" = mainnet
+
+        let mut struct_enc = Vec::with_capacity(96);
+        struct_enc.extend_from_slice(&agent_type_hash);
+        struct_enc.extend_from_slice(&source_hash);
+        struct_enc.extend_from_slice(&connection_id);
+        let struct_hash: [u8; 32] = Keccak256::digest(&struct_enc).into();
+
+        // 7. Final EIP-712 signing hash
+        let mut msg = Vec::with_capacity(66);
+        msg.push(0x19u8);
+        msg.push(0x01u8);
+        msg.extend_from_slice(&domain_sep);
+        msg.extend_from_slice(&struct_hash);
+        let signing_hash: [u8; 32] = Keccak256::digest(&msg).into();
+
+        // 8. secp256k1 sign
+        let key_bytes = hex::decode(private_key.trim_start_matches("0x"))
+            .map_err(|e| format!("HL: bad private key: {}", e))?;
+        let signing_key = SigningKey::from_bytes(key_bytes.as_slice().into())
+            .map_err(|e| format!("HL: invalid key: {}", e))?;
+        let (sig, recid): (k256::ecdsa::Signature, k256::ecdsa::RecoveryId) = signing_key
+            .sign_prehash_recoverable(&signing_hash)
+            .map_err(|e| format!("HL: sign error: {}", e))?;
+
+        let sig_r = sig.r().to_bytes();
+        let sig_s = sig.s().to_bytes();
+        let r_hex = format!("0x{}", hex::encode(&sig_r[..]));
+        let s_hex = format!("0x{}", hex::encode(&sig_s[..]));
+        let v = recid.to_byte() as u64 + 27;
+
+        // 9. POST to exchange
+        let action_json = serde_json::to_value(&action)
+            .map_err(|e| format!("HL: action json: {}", e))?;
+        let body = serde_json::json!({
+            "action":    action_json,
+            "nonce":     nonce,
+            "signature": { "r": r_hex, "s": s_hex, "v": v }
+        });
+
+        let resp = client
+            .post("https://api.hyperliquid.xyz/exchange")
+            .json(&body)
+            .send().await.map_err(|e| format!("HL send: {}", e))?;
+
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(format!("HL order failed {}: {}", status, text));
+        }
+        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+        if parsed["status"].as_str() != Some("ok") {
+            return Err(format!("HL order rejected: {}", text));
+        }
+
+        info!("   -> Hyperliquid Perp {} {} size={}", side, coin, size);
+        Ok(())
     }
 }

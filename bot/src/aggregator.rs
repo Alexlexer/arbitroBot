@@ -419,6 +419,14 @@ impl Aggregator {
                     add_key!(ExchangeId::Gate,       new_secrets.gate_key,     new_secrets.gate_secret,     None);
                     add_key!(ExchangeId::Bitmart,    new_secrets.bitmart_key,  new_secrets.bitmart_secret,  new_secrets.bitmart_memo.clone());
                     add_key!(ExchangeId::Kraken,     new_secrets.kraken_key,   new_secrets.kraken_secret,   None);
+                    // Hyperliquid: private key stored as both key and secret
+                    if let Some(pk) = new_secrets.hyperliquid_private_key.clone() {
+                        if !pk.is_empty() {
+                            c.api_keys.insert(ExchangeId::Hyperliquid, ExchangeCredentials {
+                                key: pk.clone(), secret: pk, passphrase: None,
+                            });
+                        }
+                    }
                     if let Err(e) = new_secrets.save() {
                         error!("Failed to save secrets: {}", e);
                     }

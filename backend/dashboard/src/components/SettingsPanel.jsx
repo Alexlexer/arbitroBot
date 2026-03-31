@@ -19,6 +19,7 @@ const SettingsPanel = ({ config, secrets, sendCommand }) => {
         kraken_key: "", kraken_secret: "",
         mexc_key: "", mexc_secret: "",
         okx_key: "", okx_secret: "", okx_passphrase: "",
+        hyperliquid_private_key: "",
         telegram_token: "", telegram_chat_id: ""
     });
 
@@ -164,10 +165,15 @@ const SettingsPanel = ({ config, secrets, sendCommand }) => {
                         <InputField label="Secret" value={localSecrets.okx_secret} onChange={v => handleSecretChange('okx_secret', v)} isSecret />
                         <InputField label="Passphrase" value={localSecrets.okx_passphrase} onChange={v => handleSecretChange('okx_passphrase', v)} isSecret />
                     </VaultSection>
-                    <VaultSection title="DEX — Hyperliquid / Aster / Lighter">
+                    <VaultSection title="Hyperliquid (DEX Perpetuals)">
+                        <InputField label="Wallet Private Key" value={localSecrets.hyperliquid_private_key} onChange={v => handleSecretChange('hyperliquid_private_key', v)} isSecret />
+                        <p className="text-[11px] text-zinc-600 leading-relaxed">
+                            EVM wallet private key (0x…). Used to sign orders via EIP-712. Never shared — stored locally only.
+                        </p>
+                    </VaultSection>
+                    <VaultSection title="Aster / Lighter (DEX)">
                         <p className="text-[11px] text-zinc-500 leading-relaxed">
-                            These connectors read public orderbook APIs — no API keys needed for price feeds.
-                            Trading execution requires a wallet private key (not yet implemented).
+                            Price feeds are live (public orderbook APIs). Trading execution not yet implemented — Aster requires on-chain interaction; Lighter uses a proprietary L2 key system.
                         </p>
                     </VaultSection>
                     <VaultSection title="Telegram">
