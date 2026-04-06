@@ -8,6 +8,7 @@
   "polling_interval_ms": 5000,
   "automated_rebalance_enabled": false,
   "live_trading_enabled": false,
+  "symbol_blacklist": ["DRIFT"],
   "listener_ws_url": null,
   "enabled_exchanges": {
     "Binance": true,

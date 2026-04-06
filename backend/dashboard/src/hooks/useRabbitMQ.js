@@ -112,14 +112,17 @@ export const useRabbitMQ = () => {
   }, []);
 
   useEffect(() => {
-    // Direct RabbitMQ Web STOMP port (15674). For remote access ensure port 15674 is open on the server.
+    // In production nginx proxies /ws → rabbitmq:15674/ws internally.
+    // In dev Vite proxies /ws → localhost:15674/ws.
+    // Always connect through the same origin so the proxy handles routing.
     const envUrl = typeof import.meta !== 'undefined' && import.meta.env?.VITE_RABBITMQ_WS_URL;
     const hostname = typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1';
     const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
     const scheme = isHttps ? 'wss' : 'ws';
+    const originPort = typeof window !== 'undefined' ? window.location.port : '5174';
     const brokerURL = (envUrl && envUrl.trim())
       ? envUrl.trim()
-      : `${scheme}://${hostname}:15674/ws`;
+      : `${scheme}://${hostname}${originPort ? ':' + originPort : ''}/ws`;
     const client = new Client({
       brokerURL,
       connectHeaders: {

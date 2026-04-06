@@ -47,6 +47,9 @@ pub struct AppConfig {
     pub automated_rebalance_enabled: bool,
     #[serde(default)]
     pub live_trading_enabled: bool,
+    /// Symbols to skip entirely (e.g. hacked tokens with fake spreads).
+    #[serde(default)]
+    pub symbol_blacklist: Vec<String>,
     pub wallets: HashMap<ExchangeId, String>,
     /// Per-exchange endpoint and tuning overrides.  Absent keys use launcher defaults.
     #[serde(default)]
@@ -114,6 +117,7 @@ impl AppConfig {
             polling_interval_ms: 5000,
             automated_rebalance_enabled: false,
             live_trading_enabled: false,
+            symbol_blacklist: Vec::new(),
             wallets: HashMap::new(),
             exchange_endpoints,
         }

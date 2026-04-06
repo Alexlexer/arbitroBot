@@ -521,6 +521,14 @@ impl Aggregator {
     }
 
     async fn detect_sharps(&self, symbol: &str) {
+        // Skip blacklisted symbols (hacked tokens, bad data, etc.)
+        {
+            let cfg = self.config.lock().unwrap_or_else(|e| e.into_inner());
+            if cfg.symbol_blacklist.iter().any(|b| b.eq_ignore_ascii_case(symbol)) {
+                return;
+            }
+        }
+
         if let Some(exchanges) = self.market_data.get(symbol) {
             if exchanges.len() < 2 { return; }
 
