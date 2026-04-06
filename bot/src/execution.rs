@@ -43,11 +43,20 @@ struct HlLimitTif {
 type HmacSha256 = Hmac<Sha256>;
 type HmacSha512 = Hmac<Sha512>; // used by Gate (SHA-512 body hash signing)
 
+/// Max age (ms) an opportunity may sit in the execution queue before being discarded.
+const MAX_OPP_AGE_MS: i64 = 2_000;
+/// Slippage cap for CEX limit-IOC orders (0.3%). Orders that can't fill within this band are cancelled.
+const EXEC_SLIPPAGE: f64 = 0.003;
+/// Cooldown (ms) before the same symbol+pair may be traded again, to prevent double-execution.
+const EXEC_DEDUP_MS: i64 = 2_000;
+
 pub struct ExecutionActor {
     rx: Receiver<ArbitrageOpportunity>,
     rate_limiter: Arc<RateLimiter>,
     config: Arc<std::sync::Mutex<AppConfig>>,
     trade_log: Vec<TradeRecord>,
+    /// (symbol-long_ex-short_ex) -> last execution timestamp ms
+    recent_executions: std::collections::HashMap<String, i64>,
 }
 
 impl ExecutionActor {
@@ -56,7 +65,7 @@ impl ExecutionActor {
         rate_limiter: Arc<RateLimiter>,
         config: Arc<std::sync::Mutex<AppConfig>>,
     ) -> Self {
-        Self { rx, rate_limiter, config, trade_log: Vec::new() }
+        Self { rx, rate_limiter, config, trade_log: Vec::new(), recent_executions: std::collections::HashMap::new() }
     }
 
     pub async fn run(&mut self) {
@@ -68,11 +77,31 @@ impl ExecutionActor {
     }
 
     async fn execute_opportunity(&mut self, opp: ArbitrageOpportunity, live: bool) {
+        // 1. Discard stale opportunities (price may have moved while queued).
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let age_ms = now_ms - opp._timestamp;
+        if age_ms > MAX_OPP_AGE_MS {
+            warn!("SKIP {}: opportunity is {}ms old (max {}ms)", opp.symbol, age_ms, MAX_OPP_AGE_MS);
+            return;
+        }
+
+        // 2. Dedup: reject if same pair traded within the last EXEC_DEDUP_MS.
+        let dedup_key = format!("{}-{:?}-{:?}", opp.symbol, opp.long_exchange, opp.short_exchange);
+        if let Some(&last_ts) = self.recent_executions.get(&dedup_key) {
+            if now_ms - last_ts < EXEC_DEDUP_MS {
+                warn!("SKIP {}: dedup cooldown ({}ms since last exec)", opp.symbol, now_ms - last_ts);
+                return;
+            }
+        }
+        self.recent_executions.insert(dedup_key.clone(), now_ms);
+        // Evict old dedup entries so the map doesn't grow unbounded.
+        self.recent_executions.retain(|_, ts| now_ms - *ts < EXEC_DEDUP_MS * 10);
+
         info!(
-            "OPPORTUNITY: Long {} on {} @ {}, Short {} on {} @ {} | Spread: {:.2}% | Vol: {} USDT",
+            "OPPORTUNITY: Long {} on {} @ {}, Short {} on {} @ {} | Spread: {:.2}% | Vol: {} USDT | Age: {}ms",
             opp.symbol, opp.long_exchange, opp.long_price,
             opp.symbol, opp.short_exchange, opp.short_price,
-            opp.spread_pct, opp.volume_usdt
+            opp.spread_pct, opp.volume_usdt, age_ms
         );
 
         if !self.rate_limiter.check_limit(opp.long_exchange, true, 1.0).await {
@@ -221,8 +250,18 @@ impl ExecutionActor {
         let qty = (volume_usdt / price).round_dp(6);
         if qty.is_zero() { return Err("qty zero".into()); }
 
+        // Limit-IOC caps worst-case fill price; rejected rather than filled at a blown price.
+        let limit_price = if side == "BUY" {
+            (price * Decimal::try_from(1.0 + EXEC_SLIPPAGE).unwrap()).round_dp(2)
+        } else {
+            (price * Decimal::try_from(1.0 - EXEC_SLIPPAGE).unwrap()).round_dp(2)
+        };
+
         let ts = chrono::Utc::now().timestamp_millis();
-        let params = format!("symbol={}&side={}&type=MARKET&quantity={}&timestamp={}", sym, side, qty, ts);
+        let params = format!(
+            "symbol={}&side={}&type=LIMIT&timeInForce=IOC&quantity={}&price={}&timestamp={}",
+            sym, side, qty, limit_price, ts
+        );
         let sig = Self::hmac_sha256_hex(secret, &params);
 
         let resp = reqwest::Client::new()
@@ -252,7 +291,17 @@ impl ExecutionActor {
         let ts = chrono::Utc::now().timestamp_millis().to_string();
         let rw = "5000";
         let side_cap = if side == "BUY" { "Buy" } else { "Sell" };
-        let body = format!(r#"{{"category":"linear","symbol":"{}","side":"{}","orderType":"Market","qty":"{}"}}"#, sym, side_cap, qty);
+
+        // Limit-IOC: fills immediately within slippage band or is cancelled.
+        let limit_price = if side == "BUY" {
+            (price * Decimal::try_from(1.0 + EXEC_SLIPPAGE).unwrap()).round_dp(2)
+        } else {
+            (price * Decimal::try_from(1.0 - EXEC_SLIPPAGE).unwrap()).round_dp(2)
+        };
+        let body = format!(
+            r#"{{"category":"linear","symbol":"{}","side":"{}","orderType":"Limit","qty":"{}","price":"{}","timeInForce":"IOC"}}"#,
+            sym, side_cap, qty, limit_price
+        );
         let sig = Self::hmac_sha256_hex(secret, &format!("{}{}{}{}", ts, key, rw, body));
 
         let resp = reqwest::Client::new()
@@ -293,10 +342,18 @@ impl ExecutionActor {
             -(qty_raw.to_string().parse::<i64>().unwrap_or(1))
         };
 
+        // Gate futures: price "0" = market order. Use a limit price instead to cap slippage.
+        // Positive size = long (buy on ask), negative = short (sell on bid).
+        let limit_price = if side == "BUY" {
+            (price * Decimal::try_from(1.0 + EXEC_SLIPPAGE).unwrap()).round_dp(4)
+        } else {
+            (price * Decimal::try_from(1.0 - EXEC_SLIPPAGE).unwrap()).round_dp(4)
+        };
+
         let body = serde_json::json!({
             "contract": contract,
             "size": size,
-            "price": "0",
+            "price": limit_price.to_string(),
             "tif": "ioc",
             "reduce_only": false
         }).to_string();
