@@ -192,7 +192,11 @@ pub struct DashboardAuthResponse {
     pub error: Option<String>,
 }
 
+/// Commands sent from the dashboard via RabbitMQ.
+/// Serialised with internally-tagged format so the JSON key "type" drives dispatch,
+/// e.g. {"type":"update_spread","threshold":"0.5"}.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum BotCommand {
     UpdateSpread {
         threshold: Decimal,
@@ -215,6 +219,9 @@ pub enum BotCommand {
         exchange: ExchangeId,
         fee: Decimal,
     },
+    UpdateBlacklist {
+        symbols: Vec<String>,
+    },
     DashboardLogin {
         username: String,
         password: String,
@@ -226,8 +233,12 @@ pub enum BotCommand {
         invite_code: String,
         request_id: String,
     },
-    UpdateConfig(crate::config::AppConfig),
-    UpdateSecrets(crate::config::SecretsConfig),
+    UpdateConfig {
+        config: crate::config::AppConfig,
+    },
+    UpdateSecrets {
+        secrets: crate::config::SecretsConfig,
+    },
     EmergencyStop,
     Resume,
 }

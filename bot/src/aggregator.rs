@@ -386,11 +386,15 @@ impl Aggregator {
                     info!("COMMAND: Fee override for {} set to {}", exchange, fee);
                 }
                 BotCommand::DashboardLogin { .. } | BotCommand::DashboardRegister { .. } => {}
-                BotCommand::UpdateConfig(config) => {
+                BotCommand::UpdateBlacklist { symbols } => {
+                    info!("COMMAND: Blacklist updated: {:?}", symbols);
+                    c.symbol_blacklist = symbols;
+                }
+                BotCommand::UpdateConfig { config } => {
                     *c = config;
                     info!("COMMAND: Full config updated");
                 }
-                BotCommand::UpdateSecrets(new_secrets) => {
+                BotCommand::UpdateSecrets { secrets: new_secrets } => {
                     use crate::config::ExchangeCredentials;
                     use crate::model::ExchangeId;
                     macro_rules! add_key {
@@ -931,13 +935,13 @@ impl AsyncConsumer for CommandConsumer {
         if let Ok(cmd) = serde_json::from_slice::<crate::model::BotCommand>(&content) {
             info!("COMMAND_RECEIVED: {:?}", cmd);
             match cmd {
-                crate::model::BotCommand::UpdateConfig(new_conf) => {
+                crate::model::BotCommand::UpdateConfig { config: new_conf } => {
                     let mut conf = self.config.lock().unwrap();
                     *conf = new_conf;
                     let _ = conf.save();
                     info!("CONFIG_UPDATED: New thresholds applied.");
                 }
-                crate::model::BotCommand::UpdateSecrets(new_secrets) => {
+                crate::model::BotCommand::UpdateSecrets { secrets: new_secrets } => {
                     let mut sec = self.secrets.lock().unwrap();
                     *sec = new_secrets;
                     let _ = sec.save();

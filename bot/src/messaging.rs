@@ -1,11 +1,43 @@
 use amqprs::callbacks::{DefaultChannelCallback, DefaultConnectionCallback};
-use amqprs::channel::{BasicPublishArguments, Channel, ExchangeDeclareArguments};
+use amqprs::channel::{BasicPublishArguments, BasicConsumeArguments, BasicAckArguments, Channel, ExchangeDeclareArguments, QueueDeclareArguments, QueueBindArguments};
 use amqprs::connection::{Connection, OpenConnectionArguments};
-use amqprs::BasicProperties;
+use amqprs::consumer::AsyncConsumer;
+use amqprs::{BasicProperties, Deliver};
+use async_trait::async_trait;
 use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use log::{info, error, warn};
+
+/// Receives raw AMQP messages, deserialises them as BotCommand, and forwards to the aggregator.
+struct CommandForwarder {
+    cmd_tx: tokio::sync::mpsc::Sender<crate::model::BotCommand>,
+}
+
+#[async_trait]
+impl AsyncConsumer for CommandForwarder {
+    async fn consume(
+        &mut self,
+        channel: &Channel,
+        deliver: Deliver,
+        _props: BasicProperties,
+        content: Vec<u8>,
+    ) {
+        match serde_json::from_slice::<crate::model::BotCommand>(&content) {
+            Ok(cmd) => {
+                if self.cmd_tx.send(cmd).await.is_err() {
+                    error!("Command channel closed — aggregator may have stopped.");
+                }
+            }
+            Err(e) => {
+                warn!("Unrecognised bot command ({}): {}", e, String::from_utf8_lossy(&content));
+            }
+        }
+        let _ = channel
+            .basic_ack(BasicAckArguments::new(deliver.delivery_tag(), false))
+            .await;
+    }
+}
 
 pub struct RabbitMQClient {
     _connection: Connection,
@@ -67,10 +99,32 @@ impl RabbitMQClient {
         Ok(())
     }
 
-    pub async fn setup_command_consumer(&self, queue_name: &str, routing_key: &str, _cmd_tx: tokio::sync::mpsc::Sender<crate::model::BotCommand>) -> Result<(), Box<dyn std::error::Error>> {
-        // This method would set up a consumer for commands
-        // For now, we'll just log that it was called
-        info!("Setting up command consumer on queue '{}' with routing key '{}'", queue_name, routing_key);
+    pub async fn setup_command_consumer(
+        &self,
+        queue_name: &str,
+        routing_key: &str,
+        cmd_tx: tokio::sync::mpsc::Sender<crate::model::BotCommand>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Declare durable queue so it survives broker restarts
+        let (q, _, _) = self.channel
+            .queue_declare(QueueDeclareArguments::new(queue_name).durable(true).finish())
+            .await?
+            .ok_or("queue_declare returned None")?;
+
+        // Bind to the topic exchange
+        self.channel
+            .queue_bind(QueueBindArguments::new(&q, "arbit_hub", routing_key))
+            .await?;
+
+        // Register async consumer — messages are forwarded to the aggregator via cmd_tx
+        self.channel
+            .basic_consume(
+                CommandForwarder { cmd_tx },
+                BasicConsumeArguments::new(&q, "arbit-bot-cmd-consumer"),
+            )
+            .await?;
+
+        info!("Command consumer active on queue='{}' routing_key='{}'", queue_name, routing_key);
         Ok(())
     }
 
