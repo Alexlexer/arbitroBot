@@ -253,16 +253,14 @@ impl Aggregator {
         let client = reqwest::Client::new();
         let binance_sym = format!("{}USDT", symbol);
         let bybit_sym = format!("{}USDT", symbol);
-        let bitget_sym = format!("{}USDT", symbol);
 
-        let (b_res, by_res, bg_res) = tokio::join!(
+        let (b_res, by_res) = tokio::join!(
             Self::fetch_depth_binance(&client, &binance_sym),
             Self::fetch_depth_bybit(&client, &bybit_sym),
-            Self::fetch_depth_bitget(&client, &bitget_sym),
         );
 
         let mut injected = 0u32;
-        for result in [b_res, by_res, bg_res] {
+        for result in [b_res, by_res] {
             if let Ok(Some(ticker)) = result {
                 let entry = self.market_data.entry(ticker.symbol.clone()).or_insert_with(HashMap::new);
                 entry.insert(ticker.exchange, ticker);
@@ -289,13 +287,6 @@ impl Aggregator {
         Self::parse_standard_depth(&result, symbol, ExchangeId::Bybit)
     }
 
-    async fn fetch_depth_bitget(client: &reqwest::Client, symbol: &str) -> Result<Option<UnifiedTicker>, Box<dyn std::error::Error + Send + Sync>> {
-        let url = format!("https://api.bitget.com/api/v2/mix/market/depth?symbol={}&productType=USDT-FUTURES&limit=5", symbol);
-        let resp = client.get(&url).send().await?;
-        let json: serde_json::Value = resp.json().await?;
-        let data = json.get("data").cloned().unwrap_or(serde_json::Value::Null);
-        Self::parse_standard_depth(&data, symbol, ExchangeId::Bitget)
-    }
 
     fn parse_standard_depth(json: &serde_json::Value, symbol: &str, exchange: ExchangeId) -> Result<Option<UnifiedTicker>, Box<dyn std::error::Error + Send + Sync>> {
         let empty = vec![];
@@ -413,16 +404,18 @@ impl Aggregator {
                     }
                     add_key!(ExchangeId::Binance,    new_secrets.binance_key,  new_secrets.binance_secret,  None);
                     add_key!(ExchangeId::Bybit,      new_secrets.bybit_key,    new_secrets.bybit_secret,    None);
-                    add_key!(ExchangeId::Bitget,     new_secrets.bitget_key,   new_secrets.bitget_secret,   new_secrets.bitget_passphrase.clone());
-                    add_key!(ExchangeId::MEXC,       new_secrets.mexc_key,     new_secrets.mexc_secret,     None);
-                    add_key!(ExchangeId::Okx,        new_secrets.okx_key,      new_secrets.okx_secret,      new_secrets.okx_passphrase.clone());
                     add_key!(ExchangeId::Gate,       new_secrets.gate_key,     new_secrets.gate_secret,     None);
-                    add_key!(ExchangeId::Bitmart,    new_secrets.bitmart_key,  new_secrets.bitmart_secret,  new_secrets.bitmart_memo.clone());
-                    add_key!(ExchangeId::Kraken,     new_secrets.kraken_key,   new_secrets.kraken_secret,   None);
-                    // Hyperliquid: private key stored as both key and secret
+                    // DEX exchanges: private key stored as both key and secret
                     if let Some(pk) = new_secrets.hyperliquid_private_key.clone() {
                         if !pk.is_empty() {
                             c.api_keys.insert(ExchangeId::Hyperliquid, ExchangeCredentials {
+                                key: pk.clone(), secret: pk, passphrase: None,
+                            });
+                        }
+                    }
+                    if let Some(pk) = new_secrets.aster_private_key.clone() {
+                        if !pk.is_empty() {
+                            c.api_keys.insert(ExchangeId::Aster, ExchangeCredentials {
                                 key: pk.clone(), secret: pk, passphrase: None,
                             });
                         }
@@ -570,8 +563,10 @@ impl Aggregator {
                     let total_cost_pct = (fee_long_total + fee_short_total + slippage_total) * Decimal::from(100);
                     let net_spread = gross_spread - total_cost_pct;
 
-                    // User requested 5.0%+ spread
-                    let threshold = Decimal::from(5); // 5.0%
+                    let threshold = {
+                        let cfg = self.config.lock().unwrap_or_else(|e| e.into_inner());
+                        Decimal::try_from(cfg.min_spread_threshold).unwrap_or(Decimal::from(1))
+                    };
                     let max_sanity = Decimal::from(50); // 50% max
                     
                     if net_spread >= threshold && net_spread < max_sanity {

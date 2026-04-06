@@ -1,7 +1,49 @@
 {
+  "min_spread_threshold": 5,
+  "depth_usdt": 1000,
   "margin_threshold_low": "0.4",
   "margin_threshold_high": "0.7",
   "concentration_threshold": "0.7",
   "target_margin_ratio": "0.2",
-  "polling_interval_ms": 5000
+  "polling_interval_ms": 5000,
+  "automated_rebalance_enabled": false,
+  "live_trading_enabled": false,
+  "listener_ws_url": null,
+  "enabled_exchanges": {
+    "Binance": true,
+    "Bybit": true,
+    "Gate": true,
+    "Hyperliquid": true,
+    "Aster": false
+  },
+  "api_keys": {},
+  "taker_fee_overrides": {},
+  "wallets": {},
+  "exchange_endpoints": {
+    "Binance": {
+      "ws_url": "wss://fstream.binance.com/stream",
+      "rest_url": "https://fapi.binance.com",
+      "max_symbols": 300
+    },
+    "Bybit": {
+      "ws_url": "wss://stream.bybit.com/v5/public/linear",
+      "rest_url": "https://api.bybit.com",
+      "max_symbols": 300
+    },
+    "Gate": {
+      "ws_url": "wss://fx-ws.gateio.ws/v4/ws/usdt",
+      "rest_url": "https://fx-api.gateio.ws/api/v4",
+      "max_symbols": 300
+    },
+    "Hyperliquid": {
+      "ws_url": "wss://api.hyperliquid.xyz/ws",
+      "rest_url": "https://api.hyperliquid.xyz",
+      "max_symbols": 200,
+      "ping_interval_secs": 30
+    },
+    "Aster": {
+      "rest_url": "https://api.aster.finance",
+      "poll_interval_ms": 500
+    }
+  }
 }

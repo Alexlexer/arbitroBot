@@ -59,15 +59,9 @@ pub struct SymbolMarketFilters {
 pub enum ExchangeId {
     Binance,
     Bybit,
-    Bitget,
-    MEXC,
-    Bitmart,
-    Kraken,
     Gate,
-    Okx,
     Hyperliquid,
     Aster,
-    Lighter,
 }
 
 impl ExchangeId {
@@ -75,15 +69,9 @@ impl ExchangeId {
         match self {
             ExchangeId::Binance => Decimal::new(5, 4),      // 0.05%
             ExchangeId::Bybit => Decimal::new(6, 4),        // 0.06%
-            ExchangeId::Bitget => Decimal::new(6, 4),       // 0.06%
-            ExchangeId::MEXC => Decimal::new(1, 3),         // 0.1%
-            ExchangeId::Bitmart => Decimal::new(1, 3),      // 0.1%
-            ExchangeId::Kraken => Decimal::new(2, 3),       // 0.2%
             ExchangeId::Gate => Decimal::new(5, 4),         // 0.05%
-            ExchangeId::Okx => Decimal::new(5, 4),          // 0.05%
             ExchangeId::Hyperliquid => Decimal::new(35, 5), // 0.035%
             ExchangeId::Aster => Decimal::new(5, 4),        // 0.05%
-            ExchangeId::Lighter => Decimal::new(4, 4),      // 0.04%
         }
     }
 

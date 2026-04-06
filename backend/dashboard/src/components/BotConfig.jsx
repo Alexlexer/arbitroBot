@@ -1,13 +1,24 @@
 import React, { useEffect, useState } from 'react';
-import { Settings, CheckCircle2, Circle } from 'lucide-react';
+import { Settings, CheckCircle2, Circle, TrendingUp } from 'lucide-react';
 
 const BotConfig = ({ config, onCommand }) => {
   if (!config) return null;
 
   const [listenerWsUrlDraft, setListenerWsUrlDraft] = useState(config.listener_ws_url || '');
+  const [spreadDraft, setSpreadDraft] = useState(String(config.min_spread_threshold ?? ''));
+  const [depthDraft, setDepthDraft] = useState(String(config.depth_usdt ?? ''));
+
   useEffect(() => {
     setListenerWsUrlDraft(config.listener_ws_url || '');
   }, [config.listener_ws_url]);
+
+  useEffect(() => {
+    setSpreadDraft(String(config.min_spread_threshold ?? ''));
+  }, [config.min_spread_threshold]);
+
+  useEffect(() => {
+    setDepthDraft(String(config.depth_usdt ?? ''));
+  }, [config.depth_usdt]);
 
   const handleToggle = (exchange) => {
     onCommand({
@@ -17,32 +28,22 @@ const BotConfig = ({ config, onCommand }) => {
     });
   };
 
-  const handleSpreadChange = (e) => {
-    const val = parseFloat(e.target.value);
-    if (!isNaN(val)) {
-      onCommand({
-        type: 'update_spread',
-        threshold: val
-      });
+  const applySpread = () => {
+    const val = parseFloat(spreadDraft);
+    if (!isNaN(val) && val >= 0) {
+      onCommand({ type: 'update_spread', threshold: val });
+    } else {
+      setSpreadDraft(String(config.min_spread_threshold ?? ''));
     }
   };
 
-  const handleDepthChange = (e) => {
-    const val = parseFloat(e.target.value);
-    if (!isNaN(val)) {
-      onCommand({
-        type: 'update_depth',
-        depth_usdt: val,
-      });
+  const applyDepth = () => {
+    const val = parseFloat(depthDraft);
+    if (!isNaN(val) && val >= 100) {
+      onCommand({ type: 'update_depth', depth_usdt: val });
+    } else {
+      setDepthDraft(String(config.depth_usdt ?? ''));
     }
-  };
-
-  const handleToggleVwap = () => {
-    onCommand({
-      type: 'update_depth', // pricing mode flag is only in config for now; kept simple to avoid protocol changes
-      depth_usdt: config.depth_usdt ?? 50,
-    });
-    // use_vwap_pricing currently toggled via config.json; UI shows hint only.
   };
 
   return (
@@ -57,40 +58,70 @@ const BotConfig = ({ config, onCommand }) => {
       <div className="space-y-6">
         {/* Spread Threshold */}
         <div>
-          <div className="flex justify-between items-center mb-2">
-            <label className="text-[10px] font-bold uppercase text-white/60">Min Net Spread %</label>
-            <span className="text-xs font-mono font-bold text-white/70">{config.min_spread_threshold}%</span>
+          <div className="flex items-center gap-2 mb-3">
+            <TrendingUp className="w-3.5 h-3.5 text-white/50" />
+            <label className="text-[10px] font-bold uppercase tracking-widest text-white/60">
+              Min Spread to Trade
+            </label>
           </div>
-          <input 
-            type="range" 
-            min="0" 
-            max="50" 
-            step="0.1"
-            value={config.min_spread_threshold}
-            onChange={handleSpreadChange}
-            className="w-full h-1.5 bg-white/5 rounded-lg appearance-none cursor-pointer accent-white"
-          />
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <input
+                type="number"
+                min="0"
+                max="100"
+                step="0.1"
+                value={spreadDraft}
+                onChange={(e) => setSpreadDraft(e.target.value)}
+                onBlur={applySpread}
+                onKeyDown={(e) => e.key === 'Enter' && applySpread()}
+                className="w-full bg-black/40 border border-white/10 rounded-xl py-3 px-4 pr-10 text-white font-mono text-sm focus:outline-none focus:ring-2 focus:ring-white/20 focus:border-white/20 transition-all"
+                placeholder="e.g. 0.5"
+              />
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 text-sm font-bold">%</span>
+            </div>
+            <button
+              onClick={applySpread}
+              className="px-4 py-3 bg-white/10 hover:bg-white/15 border border-white/10 rounded-xl text-xs font-bold text-white transition-colors"
+            >
+              Apply
+            </button>
+          </div>
+          <p className="mt-2 text-[10px] text-white/40 leading-relaxed">
+            Bot opens a trade only when the spread between two exchanges exceeds this value after fees.
+            Current: <span className="text-white/70 font-mono">{config.min_spread_threshold}%</span>
+          </p>
         </div>
 
-        {/* Depth in USDT (VWAP / liquidity) */}
+        {/* Depth in USDT */}
         <div>
-          <div className="flex justify-between items-center mb-2">
-            <label className="text-[10px] font-bold uppercase text-white/60">Depth (USDT)</label>
-            <span className="text-xs font-mono font-bold text-white/70">
-              {Math.min(5000, Math.max(100, config.depth_usdt ?? 50))}
-            </span>
+          <label className="text-[10px] font-bold uppercase tracking-widest text-white/60 mb-3 block">
+            Order Size (USDT)
+          </label>
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <input
+                type="number"
+                min="100"
+                step="100"
+                value={depthDraft}
+                onChange={(e) => setDepthDraft(e.target.value)}
+                onBlur={applyDepth}
+                onKeyDown={(e) => e.key === 'Enter' && applyDepth()}
+                className="w-full bg-black/40 border border-white/10 rounded-xl py-3 px-4 pr-14 text-white font-mono text-sm focus:outline-none focus:ring-2 focus:ring-white/20 focus:border-white/20 transition-all"
+                placeholder="e.g. 1000"
+              />
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 text-xs font-bold">USDT</span>
+            </div>
+            <button
+              onClick={applyDepth}
+              className="px-4 py-3 bg-white/10 hover:bg-white/15 border border-white/10 rounded-xl text-xs font-bold text-white transition-colors"
+            >
+              Apply
+            </button>
           </div>
-          <input
-            type="range"
-            min={100}
-            max={5000}
-            step={100}
-            value={Math.min(5000, Math.max(100, config.depth_usdt ?? 50))}
-            onChange={handleDepthChange}
-            className="w-full h-1.5 bg-white/5 rounded-lg appearance-none cursor-pointer accent-white"
-          />
-          <p className="mt-1 text-[10px] text-white/60">
-            Диапазон 100 – 5000 USDT. VWAP-диагностика и оценка ликвидности.
+          <p className="mt-2 text-[10px] text-white/40">
+            Amount per leg. Current: <span className="text-white/70 font-mono">${config.depth_usdt}</span>
           </p>
         </div>
 

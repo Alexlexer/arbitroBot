@@ -1,4 +1,4 @@
-/** Normalize exchange key for lookup (backend may send "Binance", "MEXC", "Gate"). */
+/** Normalize exchange key for lookup (backend may send "Binance", "Bybit", "Gate", "Hyperliquid", "Aster"). */
 export function exchangeKey(ex) {
   if (ex == null) return '';
   const s = typeof ex === 'string' ? ex : String(ex);

@@ -167,12 +167,9 @@ mod tests {
         let mut enabled_exchanges = HashMap::new();
         enabled_exchanges.insert(crate::model::ExchangeId::Binance, true);
         enabled_exchanges.insert(crate::model::ExchangeId::Bybit, true);
-        enabled_exchanges.insert(crate::model::ExchangeId::Bitget, true);
-        enabled_exchanges.insert(crate::model::ExchangeId::MEXC, true);
-        enabled_exchanges.insert(crate::model::ExchangeId::Bitmart, true);
-        enabled_exchanges.insert(crate::model::ExchangeId::Kraken, true);
         enabled_exchanges.insert(crate::model::ExchangeId::Gate, true);
-        enabled_exchanges.insert(crate::model::ExchangeId::Okx, true);
+        enabled_exchanges.insert(crate::model::ExchangeId::Hyperliquid, true);
+        enabled_exchanges.insert(crate::model::ExchangeId::Aster, true);
 
         AppConfig {
             min_spread_threshold: Decimal::new(5, 0),

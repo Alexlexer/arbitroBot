@@ -13,13 +13,9 @@ const SettingsPanel = ({ config, secrets, sendCommand }) => {
     const [localSecrets, setLocalSecrets] = useState({
         binance_key: "", binance_secret: "",
         bybit_key: "", bybit_secret: "",
-        bitget_key: "", bitget_secret: "", bitget_passphrase: "",
         gate_key: "", gate_secret: "",
-        bitmart_key: "", bitmart_secret: "", bitmart_memo: "",
-        kraken_key: "", kraken_secret: "",
-        mexc_key: "", mexc_secret: "",
-        okx_key: "", okx_secret: "", okx_passphrase: "",
         hyperliquid_private_key: "",
+        aster_private_key: "",
         telegram_token: "", telegram_chat_id: ""
     });
 
@@ -138,32 +134,9 @@ const SettingsPanel = ({ config, secrets, sendCommand }) => {
                         <InputField label="API Key" value={localSecrets.bybit_key} onChange={v => handleSecretChange('bybit_key', v)} isSecret />
                         <InputField label="Secret" value={localSecrets.bybit_secret} onChange={v => handleSecretChange('bybit_secret', v)} isSecret />
                     </VaultSection>
-                    <VaultSection title="Bitget">
-                        <InputField label="API Key" value={localSecrets.bitget_key} onChange={v => handleSecretChange('bitget_key', v)} isSecret />
-                        <InputField label="Secret" value={localSecrets.bitget_secret} onChange={v => handleSecretChange('bitget_secret', v)} isSecret />
-                        <InputField label="Passphrase" value={localSecrets.bitget_passphrase} onChange={v => handleSecretChange('bitget_passphrase', v)} isSecret />
-                    </VaultSection>
                     <VaultSection title="Gate.io">
                         <InputField label="API Key" value={localSecrets.gate_key} onChange={v => handleSecretChange('gate_key', v)} isSecret />
                         <InputField label="Secret" value={localSecrets.gate_secret} onChange={v => handleSecretChange('gate_secret', v)} isSecret />
-                    </VaultSection>
-                    <VaultSection title="Bitmart">
-                        <InputField label="API Key" value={localSecrets.bitmart_key} onChange={v => handleSecretChange('bitmart_key', v)} isSecret />
-                        <InputField label="Secret" value={localSecrets.bitmart_secret} onChange={v => handleSecretChange('bitmart_secret', v)} isSecret />
-                        <InputField label="Memo" value={localSecrets.bitmart_memo} onChange={v => handleSecretChange('bitmart_memo', v)} isSecret />
-                    </VaultSection>
-                    <VaultSection title="Kraken">
-                        <InputField label="API Key" value={localSecrets.kraken_key} onChange={v => handleSecretChange('kraken_key', v)} isSecret />
-                        <InputField label="Secret" value={localSecrets.kraken_secret} onChange={v => handleSecretChange('kraken_secret', v)} isSecret />
-                    </VaultSection>
-                    <VaultSection title="MEXC">
-                        <InputField label="API Key" value={localSecrets.mexc_key} onChange={v => handleSecretChange('mexc_key', v)} isSecret />
-                        <InputField label="Secret" value={localSecrets.mexc_secret} onChange={v => handleSecretChange('mexc_secret', v)} isSecret />
-                    </VaultSection>
-                    <VaultSection title="OKX">
-                        <InputField label="API Key" value={localSecrets.okx_key} onChange={v => handleSecretChange('okx_key', v)} isSecret />
-                        <InputField label="Secret" value={localSecrets.okx_secret} onChange={v => handleSecretChange('okx_secret', v)} isSecret />
-                        <InputField label="Passphrase" value={localSecrets.okx_passphrase} onChange={v => handleSecretChange('okx_passphrase', v)} isSecret />
                     </VaultSection>
                     <VaultSection title="Hyperliquid (DEX Perpetuals)">
                         <InputField label="Wallet Private Key" value={localSecrets.hyperliquid_private_key} onChange={v => handleSecretChange('hyperliquid_private_key', v)} isSecret />
@@ -171,9 +144,10 @@ const SettingsPanel = ({ config, secrets, sendCommand }) => {
                             EVM wallet private key (0x…). Used to sign orders via EIP-712. Never shared — stored locally only.
                         </p>
                     </VaultSection>
-                    <VaultSection title="Aster / Lighter (DEX)">
-                        <p className="text-[11px] text-zinc-500 leading-relaxed">
-                            Price feeds are live (public orderbook APIs). Trading execution not yet implemented — Aster requires on-chain interaction; Lighter uses a proprietary L2 key system.
+                    <VaultSection title="Aster (DEX Perpetuals)">
+                        <InputField label="Wallet Private Key" value={localSecrets.aster_private_key} onChange={v => handleSecretChange('aster_private_key', v)} isSecret />
+                        <p className="text-[11px] text-zinc-600 leading-relaxed">
+                            EVM wallet private key (0x…). Used to sign orders via EIP-712.
                         </p>
                     </VaultSection>
                     <VaultSection title="Telegram">

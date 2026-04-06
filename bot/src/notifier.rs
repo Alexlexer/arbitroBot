@@ -11,7 +11,6 @@ enum UserState {
     AwaitingExchangeSelection,
     AwaitingApiKey(crate::model::ExchangeId),
     AwaitingApiSecret(crate::model::ExchangeId, String), // Exchange, Key
-    AwaitingBitgetPassphrase(crate::model::ExchangeId, String, String), // Exchange, Key, Secret
 }
 
 pub struct TelegramNotifier {
@@ -207,7 +206,7 @@ impl TelegramNotifier {
                 let exchange_opt = match text.to_lowercase().as_str() {
                     "binance" => Some(crate::model::ExchangeId::Binance),
                     "bybit" => Some(crate::model::ExchangeId::Bybit),
-                    "bitget" => Some(crate::model::ExchangeId::Bitget),
+                    "gate" => Some(crate::model::ExchangeId::Gate),
                     _ => None,
                 };
 
@@ -218,7 +217,7 @@ impl TelegramNotifier {
                     }
                     self.send_to_chat(chat_id, &format!("⚙️ *Setup: {}*\nPlease enter your **API Key**:", ex), None).await;
                 } else {
-                   self.send_to_chat(chat_id, "❌ *Invalid Exchange.*\nPlease type: Binance, Bybit, or Bitget (or type /cancel):", None).await;
+                   self.send_to_chat(chat_id, "❌ *Invalid Exchange.*\nPlease type: Binance, Bybit, or Gate (or type /cancel):", None).await;
                 }
             }
             UserState::AwaitingApiKey(ex) => {
@@ -229,23 +228,7 @@ impl TelegramNotifier {
                 self.send_to_chat(chat_id, "🔐 *Setup: API Secret*\nPlease enter your **API Secret** (it will NOT be shown in logs):", None).await;
             }
             UserState::AwaitingApiSecret(ex, key) => {
-                if ex == crate::model::ExchangeId::Bitget {
-                    {
-                        let mut s_map = self.states.lock().unwrap();
-                        s_map.insert(chat_id.to_string(), UserState::AwaitingBitgetPassphrase(ex, key, text.to_string()));
-                    }
-                    self.send_to_chat(chat_id, "🔑 *Setup: Passphrase (Bitget)*\nPlease enter your API Passphrase:", None).await;
-                } else {
-                    self.save_credentials(ex, &key, text, "").await;
-                    {
-                        let mut s_map = self.states.lock().unwrap();
-                        s_map.insert(chat_id.to_string(), UserState::Idle);
-                    }
-                    self.send_to_chat(chat_id, &format!("✅ *Credentials saved for {}!* \nBot will now start polling your private data.", ex), None).await;
-                }
-            }
-            UserState::AwaitingBitgetPassphrase(ex, key, secret) => {
-                self.save_credentials(ex, &key, &secret, text).await;
+                self.save_credentials(ex, &key, text, "").await;
                 {
                     let mut s_map = self.states.lock().unwrap();
                     s_map.insert(chat_id.to_string(), UserState::Idle);
@@ -308,7 +291,7 @@ impl TelegramNotifier {
                 let mut s_map = self.states.lock().unwrap();
                 s_map.insert(chat_id.to_string(), UserState::AwaitingExchangeSelection);
             }
-            self.send_to_chat(chat_id, "🛠 *API Hookup Wizard*\nWhich exchange do you want to configure?\n\nType: **Binance**, **Bybit**, or **Bitget**", None).await;
+            self.send_to_chat(chat_id, "🛠 *API Hookup Wizard*\nWhich exchange do you want to configure?\n\nType: **Binance**, **Bybit**, or **Gate**", None).await;
             return;
         }
 
@@ -369,10 +352,6 @@ impl TelegramNotifier {
         let prefix = match exchange {
             crate::model::ExchangeId::Binance => "BINANCE",
             crate::model::ExchangeId::Bybit => "BYBIT",
-            crate::model::ExchangeId::Bitget => "BITGET",
-            crate::model::ExchangeId::MEXC => "MEXC",
-            crate::model::ExchangeId::Okx => "OKX",
-            crate::model::ExchangeId::Kraken => "KRAKEN",
             _ => return,
         };
 
@@ -416,8 +395,6 @@ impl TelegramNotifier {
                 let from_eid = match from_str.to_lowercase().as_str() {
                     "binance" => crate::model::ExchangeId::Binance,
                     "bybit" => crate::model::ExchangeId::Bybit,
-                    "mexc" => crate::model::ExchangeId::MEXC,
-                    "okx" => crate::model::ExchangeId::Okx,
                     _ => {
                         let _ = self.send_to_chat(chat_id, "❌ Error: Unsupported exchange.", None).await;
                         return;
@@ -427,8 +404,6 @@ impl TelegramNotifier {
                 let to_eid = match to_str.to_lowercase().as_str() {
                     "binance" => crate::model::ExchangeId::Binance,
                     "bybit" => crate::model::ExchangeId::Bybit,
-                    "mexc" => crate::model::ExchangeId::MEXC,
-                    "okx" => crate::model::ExchangeId::Okx,
                     _ => {
                         let _ = self.send_to_chat(chat_id, "❌ Error: Unsupported target exchange.", None).await;
                         return;

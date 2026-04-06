@@ -66,88 +66,39 @@ impl AppConfig {
         let mut enabled_exchanges = HashMap::new();
         enabled_exchanges.insert(ExchangeId::Binance, true);
         enabled_exchanges.insert(ExchangeId::Bybit, true);
-        enabled_exchanges.insert(ExchangeId::Bitget, true);
-        enabled_exchanges.insert(ExchangeId::MEXC, false); // blocked: kept in registry but disabled
-        enabled_exchanges.insert(ExchangeId::Bitmart, true);
-        enabled_exchanges.insert(ExchangeId::Kraken, true);
         enabled_exchanges.insert(ExchangeId::Gate, true);
-        enabled_exchanges.insert(ExchangeId::Okx, true);
         enabled_exchanges.insert(ExchangeId::Hyperliquid, true);
         enabled_exchanges.insert(ExchangeId::Aster, true);
-        enabled_exchanges.insert(ExchangeId::Lighter, true);
 
         // Default endpoints — all fields explicit so the generated config.json is self-documenting
         let mut exchange_endpoints: HashMap<ExchangeId, ExchangeEndpointConfig> = HashMap::new();
-        exchange_endpoints.insert(ExchangeId::Binance, ExchangeEndpointConfig {
-            ws_url:             Some("wss://fstream.binance.com/stream".into()),
-            rest_url:           Some("https://fapi.binance.com".into()),
-            max_symbols:        Some(120),
-            ..Default::default()
-        });
-        exchange_endpoints.insert(ExchangeId::Bybit, ExchangeEndpointConfig {
-            ws_url:             Some("wss://stream.bybit.com/v5/public/linear".into()),
-            rest_url:           Some("https://api.bybit.com".into()),
-            max_symbols:        Some(120),
-            sub_batch_size:     Some(50),
-            sub_batch_delay_ms: Some(100),
-            ..Default::default()
-        });
-        exchange_endpoints.insert(ExchangeId::Bitget, ExchangeEndpointConfig {
-            ws_url:             Some("wss://ws.bitget.com/v2/ws/public".into()),
-            rest_url:           Some("https://api.bitget.com".into()),
-            max_symbols:        Some(120),
-            sub_batch_size:     Some(40),
-            sub_batch_delay_ms: Some(80),
-            ping_interval_secs: Some(25),
-            ..Default::default()
-        });
-        exchange_endpoints.insert(ExchangeId::MEXC, ExchangeEndpointConfig {
-            ws_url:             Some("wss://contract.mexc.com/edge".into()),
-            rest_url:           Some("https://contract.mexc.com".into()),
-            max_symbols:        Some(120),
-            sub_batch_size:     Some(20),
-            ping_interval_secs: Some(20),
-            ..Default::default()
-        });
-        exchange_endpoints.insert(ExchangeId::Bitmart, ExchangeEndpointConfig {
-            rest_url:           Some("https://api-cloud-v2.bitmart.com/contract/public".into()),
-            max_symbols:        Some(120),
-            sub_batch_delay_ms: Some(200), // per-symbol depth request delay
-            poll_interval_ms:   Some(2000),
-            ..Default::default()
-        });
-        exchange_endpoints.insert(ExchangeId::Kraken, ExchangeEndpointConfig {
-            rest_url:           Some("https://futures.kraken.com/derivatives/api/v3".into()),
-            max_symbols:        Some(120),
-            poll_interval_ms:   Some(2000),
-            ..Default::default()
-        });
-        exchange_endpoints.insert(ExchangeId::Gate, ExchangeEndpointConfig {
-            ws_url:             Some("wss://fx-ws.gateio.ws/v4/ws/usdt".into()),
-            rest_url:           Some("https://fx-api.gateio.ws/api/v4".into()),
-            max_symbols:        Some(120),
-            sub_batch_size:     Some(20),
-            sub_batch_delay_ms: Some(100),
-            ping_interval_secs: Some(15),
-            ..Default::default()
-        });
-        exchange_endpoints.insert(ExchangeId::Hyperliquid, ExchangeEndpointConfig {
-            ws_url:             Some("wss://api.hyperliquid.xyz/ws".into()),
-            rest_url:           Some("https://api.hyperliquid.xyz".into()),
-            max_symbols:        Some(100),
-            ping_interval_secs: Some(30),
-            ..Default::default()
-        });
-        exchange_endpoints.insert(ExchangeId::Lighter, ExchangeEndpointConfig {
-            rest_url:           Some("https://mainnet.zklighter.elliot.ai".into()),
-            poll_interval_ms:   Some(500),
-            ..Default::default()
-        });
-        exchange_endpoints.insert(ExchangeId::Aster, ExchangeEndpointConfig {
-            rest_url:           Some("https://api.aster.finance".into()),
-            poll_interval_ms:   Some(500),
-            ..Default::default()
-        });
+        exchange_endpoints.insert(
+            ExchangeId::Binance,
+            ExchangeEndpointConfig {
+                ws_url: Some("wss://fstream.binance.com/stream".into()),
+                rest_url: Some("https://fapi.binance.com".into()),
+                max_symbols: Some(120),
+                ..Default::default()
+            },
+        );
+        exchange_endpoints.insert(
+            ExchangeId::Hyperliquid,
+            ExchangeEndpointConfig {
+                ws_url: Some("wss://api.hyperliquid.xyz/ws".into()),
+                rest_url: Some("https://api.hyperliquid.xyz".into()),
+                max_symbols: Some(100),
+                ping_interval_secs: Some(30),
+                ..Default::default()
+            },
+        );
+        exchange_endpoints.insert(
+            ExchangeId::Aster,
+            ExchangeEndpointConfig {
+                rest_url: Some("https://api.aster.finance".into()),
+                poll_interval_ms: Some(500),
+                ..Default::default()
+            },
+        );
 
         Self {
             min_spread_threshold: Decimal::new(5, 0),
@@ -181,22 +132,10 @@ pub struct SecretsConfig {
     pub binance_secret: Option<String>,
     pub bybit_key: Option<String>,
     pub bybit_secret: Option<String>,
-    pub bitget_key: Option<String>,
-    pub bitget_secret: Option<String>,
-    pub mexc_key: Option<String>,
-    pub mexc_secret: Option<String>,
-    pub okx_key: Option<String>,
-    pub okx_secret: Option<String>,
-    pub okx_passphrase: Option<String>,
-    pub bitget_passphrase: Option<String>,
     pub gate_key: Option<String>,
     pub gate_secret: Option<String>,
-    pub bitmart_key: Option<String>,
-    pub bitmart_secret: Option<String>,
-    pub bitmart_memo: Option<String>,
-    pub kraken_key: Option<String>,
-    pub kraken_secret: Option<String>,
     pub hyperliquid_private_key: Option<String>,
+    pub aster_private_key: Option<String>,
     pub telegram_token: Option<String>,
     pub telegram_chat_id: Option<String>,
 }

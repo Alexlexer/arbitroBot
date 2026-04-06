@@ -4,15 +4,13 @@ import { Save, Key, Shield, AlertCircle, CheckCircle2, ChevronRight, Settings as
 import { motion, AnimatePresence } from 'framer-motion';
 
 // id = sent to bot (snake_case). configKey = key in botConfig.enabled_exchanges (PascalCase)
+// isDex = true means it uses a single EVM private key instead of API key + secret
 const ALL_EXCHANGES = [
-  { id: 'binance', configKey: 'Binance', name: 'Binance', icon: '🔶' },
-  { id: 'bybit', configKey: 'Bybit', name: 'Bybit', icon: '🟡' },
-  { id: 'bitget', configKey: 'Bitget', name: 'Bitget', icon: '🔵' },
-  { id: 'mexc', configKey: 'MEXC', name: 'MEXC', icon: '🟢' },
-  { id: 'okx', configKey: 'Okx', name: 'OKX', icon: '⚪️' },
-  { id: 'kraken', configKey: 'Kraken', name: 'Kraken', icon: '🐙' },
-  { id: 'gate', configKey: 'Gate', name: 'Gate', icon: '🟠' },
-  { id: 'bitmart', configKey: 'Bitmart', name: 'Bitmart', icon: '🟣' },
+  { id: 'binance',     configKey: 'Binance',     name: 'Binance',     icon: '🔶', isDex: false },
+  { id: 'bybit',       configKey: 'Bybit',       name: 'Bybit',       icon: '🟡', isDex: false },
+  { id: 'gate',        configKey: 'Gate',        name: 'Gate',        icon: '🟠', isDex: false },
+  { id: 'hyperliquid', configKey: 'Hyperliquid', name: 'Hyperliquid', icon: '🔷', isDex: true  },
+  { id: 'aster',       configKey: 'Aster',       name: 'Aster',       icon: '⭐', isDex: true  },
 ];
 
 const Settings = () => {
@@ -39,8 +37,9 @@ const Settings = () => {
 
   const handleSave = (e) => {
     e.preventDefault();
-    if (!formData.key || !formData.secret) {
-      setStatus({ type: 'error', message: 'Key and Secret are required' });
+    const isDex = currentEx?.isDex;
+    if (!formData.key || (!isDex && !formData.secret)) {
+      setStatus({ type: 'error', message: isDex ? 'Private key is required' : 'Key and Secret are required' });
       return;
     }
 
@@ -48,9 +47,10 @@ const Settings = () => {
       type: 'update_api_keys',
       exchange: activeExchange,
       credentials: {
+        // DEX: private key goes into both key and secret fields
         key: formData.key,
-        secret: formData.secret,
-        passphrase: formData.passphrase || null
+        secret: isDex ? formData.key : formData.secret,
+        passphrase: null
       }
     });
 
@@ -131,49 +131,52 @@ const Settings = () => {
               </div>
 
               <form onSubmit={handleSave} className="space-y-6">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-white/70 block">API Key</label>
-                  <div className="relative">
-                    <Key className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-white/50" />
-                    <input
-                      type="text"
-                      value={formData.key}
-                      onChange={(e) => setFormData({ ...formData, key: e.target.value })}
-                      className="w-full bg-slate-950/50 border border-slate-800 rounded-xl py-4 pl-12 pr-4 text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-white/20 focus:border-white/10 transition-all font-mono"
-                      placeholder="Enter your API key..."
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-white/70 block">API Secret</label>
-                  <div className="relative">
-                    <Shield className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-white/50" />
-                    <input
-                      type="password"
-                      value={formData.secret}
-                      onChange={(e) => setFormData({ ...formData, secret: e.target.value })}
-                      className="w-full bg-slate-950/50 border border-slate-800 rounded-xl py-4 pl-12 pr-4 text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-white/20 focus:border-white/10 transition-all font-mono"
-                      placeholder="Enter your API secret..."
-                    />
-                  </div>
-                </div>
-
-                {(activeExchange === 'bitget' || activeExchange === 'okx') && (
+                {currentEx?.isDex ? (
                   <div className="space-y-2">
-                    <label className="text-sm font-medium text-white/70 block">Passphrase</label>
+                    <label className="text-sm font-medium text-white/70 block">EVM Private Key</label>
                     <div className="relative">
                       <Key className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-white/50" />
                       <input
                         type="password"
-                        value={formData.passphrase}
-                        onChange={(e) => setFormData({ ...formData, passphrase: e.target.value })}
+                        value={formData.key}
+                        onChange={(e) => setFormData({ ...formData, key: e.target.value })}
                         className="w-full bg-slate-950/50 border border-slate-800 rounded-xl py-4 pl-12 pr-4 text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-white/20 focus:border-white/10 transition-all font-mono"
-                        placeholder="Enter API passphrase..."
+                        placeholder="0x..."
                       />
                     </div>
+                    <p className="text-xs text-white/40">Used to sign orders via EIP-712. Never sent off-device.</p>
                   </div>
+                ) : (
+                  <>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-white/70 block">API Key</label>
+                      <div className="relative">
+                        <Key className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-white/50" />
+                        <input
+                          type="text"
+                          value={formData.key}
+                          onChange={(e) => setFormData({ ...formData, key: e.target.value })}
+                          className="w-full bg-slate-950/50 border border-slate-800 rounded-xl py-4 pl-12 pr-4 text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-white/20 focus:border-white/10 transition-all font-mono"
+                          placeholder="Enter your API key..."
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-white/70 block">API Secret</label>
+                      <div className="relative">
+                        <Shield className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-white/50" />
+                        <input
+                          type="password"
+                          value={formData.secret}
+                          onChange={(e) => setFormData({ ...formData, secret: e.target.value })}
+                          className="w-full bg-slate-950/50 border border-slate-800 rounded-xl py-4 pl-12 pr-4 text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-white/20 focus:border-white/10 transition-all font-mono"
+                          placeholder="Enter your API secret..."
+                        />
+                      </div>
+                    </div>
+                  </>
                 )}
+
 
                 <AnimatePresence>
                   {status.message && (

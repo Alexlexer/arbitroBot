@@ -82,9 +82,6 @@ impl RateLimiter {
         // General: 10/sec
         limiters.insert(ExchangeId::Bybit, ExchangeRateLimiter::new(100.0, 10.0, 50.0, 50.0));
 
-        // Bitget: 20 per second
-        limiters.insert(ExchangeId::Bitget, ExchangeRateLimiter::new(100.0, 20.0, 20.0, 20.0));
-
         Self { limiters }
     }
 

@@ -5,14 +5,9 @@ use crate::config::{AppConfig, ExchangeEndpointConfig};
 
 pub mod binance;
 pub mod bybit;
-pub mod bitget;
-pub mod mexc;
-pub mod bitmart;
-pub mod kraken;
 pub mod gate;
 pub mod hyperliquid;
 pub mod aster;
-pub mod lighter;
 
 /// Exponential backoff delay for WebSocket reconnection (secs). Caps at 120s.
 pub fn reconnect_delay_secs(attempt: u32) -> u64 {
@@ -34,13 +29,8 @@ fn ep(config: &AppConfig, id: ExchangeId) -> ExchangeEndpointConfig {
 pub async fn launch_all(tx: Sender<UnifiedTicker>, config: &AppConfig) {
     use crate::exchange::binance::BinanceLauncher;
     use crate::exchange::bybit::BybitLauncher;
-    use crate::exchange::bitget::BitgetLauncher;
-    use crate::exchange::mexc::MexcLauncher;
-    use crate::exchange::bitmart::BitmartLauncher;
-    use crate::exchange::kraken::KrakenLauncher;
     use crate::exchange::hyperliquid::HyperliquidLauncher;
     use crate::exchange::aster::AsterLauncher;
-    use crate::exchange::lighter::LighterLauncher;
 
     // Returns true if the exchange is enabled (absent key defaults to enabled).
     let enabled = |id: ExchangeId| -> bool {
@@ -65,10 +55,6 @@ pub async fn launch_all(tx: Sender<UnifiedTicker>, config: &AppConfig) {
 
     spawn_launcher!(ExchangeId::Binance,     BinanceLauncher::new(&ep(config, ExchangeId::Binance)),     tx, "Binance");
     spawn_launcher!(ExchangeId::Bybit,       BybitLauncher::new(&ep(config, ExchangeId::Bybit)),         tx, "Bybit");
-    spawn_launcher!(ExchangeId::Bitget,      BitgetLauncher::new(&ep(config, ExchangeId::Bitget)),       tx, "Bitget");
-    spawn_launcher!(ExchangeId::MEXC,        MexcLauncher::new(&ep(config, ExchangeId::MEXC)),           tx, "MEXC");
-    spawn_launcher!(ExchangeId::Bitmart,     BitmartLauncher::new(&ep(config, ExchangeId::Bitmart)),     tx, "Bitmart");
-    spawn_launcher!(ExchangeId::Kraken,      KrakenLauncher::new(&ep(config, ExchangeId::Kraken)),       tx, "Kraken");
 
     if enabled(ExchangeId::Gate) {
         let tx_gate = tx.clone();
@@ -84,5 +70,4 @@ pub async fn launch_all(tx: Sender<UnifiedTicker>, config: &AppConfig) {
 
     spawn_launcher!(ExchangeId::Hyperliquid, HyperliquidLauncher::new(&ep(config, ExchangeId::Hyperliquid)), tx, "Hyperliquid");
     spawn_launcher!(ExchangeId::Aster,       AsterLauncher::new(&ep(config, ExchangeId::Aster)),             tx, "Aster");
-    spawn_launcher!(ExchangeId::Lighter,     LighterLauncher::new(&ep(config, ExchangeId::Lighter)),         tx, "Lighter");
 }

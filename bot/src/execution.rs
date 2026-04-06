@@ -7,6 +7,7 @@ use sha3::Keccak256;
 use log::{error, info, warn};
 use rust_decimal::Decimal;
 use std::sync::Arc;
+
 use tokio::sync::mpsc::Receiver;
 use tokio::time::{sleep, Duration};
 
@@ -40,7 +41,7 @@ struct HlLimitTif {
 }
 
 type HmacSha256 = Hmac<Sha256>;
-type HmacSha512 = Hmac<Sha512>;
+type HmacSha512 = Hmac<Sha512>; // used by Gate (SHA-512 body hash signing)
 
 pub struct ExecutionActor {
     rx: Receiver<ArbitrageOpportunity>,
@@ -160,44 +161,19 @@ impl ExecutionActor {
                 let s = std::env::var("BYBIT_API_SECRET").ok()?;
                 Some((k, s, String::new()))
             }
-            ExchangeId::Bitget => {
-                let k = std::env::var("BITGET_API_KEY").ok()?;
-                let s = std::env::var("BITGET_API_SECRET").ok()?;
-                let p = std::env::var("BITGET_API_PASSPHRASE").unwrap_or_default();
-                Some((k, s, p))
-            }
-            ExchangeId::MEXC => {
-                let k = std::env::var("MEXC_API_KEY").ok()?;
-                let s = std::env::var("MEXC_API_SECRET").ok()?;
-                Some((k, s, String::new()))
-            }
-            ExchangeId::Okx => {
-                let k = std::env::var("OKX_API_KEY").ok()?;
-                let s = std::env::var("OKX_API_SECRET").ok()?;
-                let p = std::env::var("OKX_API_PASSPHRASE").unwrap_or_default();
-                Some((k, s, p))
-            }
             ExchangeId::Gate => {
                 let k = std::env::var("GATE_API_KEY").ok()?;
                 let s = std::env::var("GATE_API_SECRET").ok()?;
-                Some((k, s, String::new()))
-            }
-            ExchangeId::Bitmart => {
-                let k = std::env::var("BITMART_API_KEY").ok()?;
-                let s = std::env::var("BITMART_API_SECRET").ok()?;
-                let memo = std::env::var("BITMART_API_MEMO").unwrap_or_default();
-                Some((k, s, memo))
-            }
-            ExchangeId::Kraken => {
-                let k = std::env::var("KRAKEN_API_KEY").ok()?;
-                let s = std::env::var("KRAKEN_API_SECRET").ok()?;
                 Some((k, s, String::new()))
             }
             ExchangeId::Hyperliquid => {
                 let pk = std::env::var("HYPERLIQUID_PRIVATE_KEY").ok()?;
                 Some((pk.clone(), pk, String::new()))
             }
-            _ => None,
+            ExchangeId::Aster => {
+                let pk = std::env::var("ASTER_PRIVATE_KEY").ok()?;
+                Some((pk.clone(), pk, String::new()))
+            }
         }
     }
 
@@ -213,16 +189,11 @@ impl ExecutionActor {
             .ok_or_else(|| format!("No credentials for {:?}", exchange))?;
 
         match exchange {
-            ExchangeId::Binance   => self.place_binance_futures(&creds.0, &creds.1, &opp.symbol, side, volume_usdt, price).await,
-            ExchangeId::Bybit     => self.place_bybit_futures(&creds.0, &creds.1, &opp.symbol, side, volume_usdt, price).await,
-            ExchangeId::Bitget    => self.place_bitget_futures(&creds.0, &creds.1, &creds.2, &opp.symbol, side, volume_usdt, price).await,
-            ExchangeId::MEXC      => self.place_mexc_futures(&creds.0, &creds.1, &opp.symbol, side, volume_usdt, price).await,
-            ExchangeId::Okx       => self.place_okx_futures(&creds.0, &creds.1, &creds.2, &opp.symbol, side, volume_usdt, price).await,
-            ExchangeId::Gate      => self.place_gate_futures(&creds.0, &creds.1, &opp.symbol, side, volume_usdt, price).await,
-            ExchangeId::Bitmart   => self.place_bitmart_futures(&creds.0, &creds.1, &creds.2, &opp.symbol, side, volume_usdt, price).await,
-            ExchangeId::Kraken       => self.place_kraken_futures(&creds.0, &creds.1, &opp.symbol, side, volume_usdt, price).await,
-            ExchangeId::Hyperliquid  => self.place_hyperliquid_perp(&creds.0, &opp.symbol, side, volume_usdt, price).await,
-            other => Err(format!("Live execution not implemented for {:?}", other)),
+            ExchangeId::Binance     => self.place_binance_futures(&creds.0, &creds.1, &opp.symbol, side, volume_usdt, price).await,
+            ExchangeId::Bybit       => self.place_bybit_futures(&creds.0, &creds.1, &opp.symbol, side, volume_usdt, price).await,
+            ExchangeId::Gate        => self.place_gate_futures(&creds.0, &creds.1, &opp.symbol, side, volume_usdt, price).await,
+            ExchangeId::Hyperliquid => self.place_hyperliquid_perp(&creds.0, &opp.symbol, side, volume_usdt, price).await,
+            ExchangeId::Aster       => self.place_aster_v3(&creds.0, &opp.symbol, side, volume_usdt, price).await,
         }
     }
 
@@ -234,24 +205,10 @@ impl ExecutionActor {
         hex::encode(mac.finalize().into_bytes())
     }
 
-    fn hmac_sha256_b64(secret: &str, payload: &str) -> String {
-        use base64::{Engine as _, engine::general_purpose};
-        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC key");
-        mac.update(payload.as_bytes());
-        general_purpose::STANDARD.encode(mac.finalize().into_bytes())
-    }
-
     fn hmac_sha512_hex(secret: &[u8], payload: &[u8]) -> String {
         let mut mac = HmacSha512::new_from_slice(secret).expect("HMAC key");
         mac.update(payload);
         hex::encode(mac.finalize().into_bytes())
-    }
-
-    fn hmac_sha512_b64(secret: &[u8], payload: &[u8]) -> String {
-        use base64::{Engine as _, engine::general_purpose};
-        let mut mac = HmacSha512::new_from_slice(secret).expect("HMAC key");
-        mac.update(payload);
-        general_purpose::STANDARD.encode(mac.finalize().into_bytes())
     }
 
     // ── Binance USDT-M Futures ─────────────────────────────────────────────────
@@ -310,132 +267,12 @@ impl ExecutionActor {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
         if !status.is_success() { return Err(format!("Bybit {}: {}", status, text)); }
+        // Bybit V5 always returns HTTP 200 — check business-logic retCode
+        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+        if parsed.get("retCode").and_then(|c| c.as_i64()) != Some(0) {
+            return Err(format!("Bybit rejected: {}", text));
+        }
         info!("   -> Bybit Futures {} {} qty={}", side, sym, qty);
-        Ok(())
-    }
-
-    // ── Bitget V2 USDT Futures ─────────────────────────────────────────────────
-
-    async fn place_bitget_futures(
-        &self, key: &str, secret: &str, passphrase: &str,
-        symbol: &str, side: &str, volume_usdt: Decimal, price: Decimal,
-    ) -> Result<(), String> {
-        let sym = format!("{}USDT", symbol);
-        let qty = (volume_usdt / price).round_dp(6);
-        if qty.is_zero() { return Err("qty zero".into()); }
-
-        let bg_side = if side == "BUY" { "buy" } else { "sell" };
-        let body = serde_json::json!({
-            "symbol": sym, "productType": "USDT-FUTURES",
-            "marginMode": "crossed", "marginCoin": "USDT",
-            "size": qty.to_string(), "side": bg_side,
-            "tradeSide": "open", "orderType": "market"
-        }).to_string();
-
-        let ts = chrono::Utc::now().timestamp_millis().to_string();
-        let path = "/api/v2/mix/order/place-order";
-        let sig = Self::hmac_sha256_b64(secret, &format!("{}POST{}{}", ts, path, body));
-
-        let resp = reqwest::Client::new()
-            .post(format!("https://api.bitget.com{}", path))
-            .header("ACCESS-KEY", key)
-            .header("ACCESS-SIGN", sig)
-            .header("ACCESS-TIMESTAMP", &ts)
-            .header("ACCESS-PASSPHRASE", passphrase)
-            .header("Content-Type", "application/json")
-            .body(body).send().await.map_err(|e| e.to_string())?;
-
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        if !status.is_success() { return Err(format!("Bitget {}: {}", status, text)); }
-        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-        if parsed.get("code").and_then(|c| c.as_str()) != Some("00000") {
-            return Err(format!("Bitget rejected: {}", text));
-        }
-        info!("   -> Bitget Futures {} {} qty={}", side, sym, qty);
-        Ok(())
-    }
-
-    // ── MEXC Contract Futures ──────────────────────────────────────────────────
-
-    async fn place_mexc_futures(
-        &self, key: &str, secret: &str,
-        symbol: &str, side: &str, volume_usdt: Decimal, price: Decimal,
-    ) -> Result<(), String> {
-        let sym = format!("{}_USDT", symbol);
-        let qty = (volume_usdt / price).round_dp(6);
-        if qty.is_zero() { return Err("qty zero".into()); }
-
-        let mexc_side = if side == "BUY" { 1 } else { 3 }; // 1=open_long, 3=open_short
-        let body = serde_json::json!({
-            "symbol": sym, "price": price.to_string(),
-            "vol": qty.to_string(), "leverage": 1,
-            "side": mexc_side, "type": 5, "openType": 2
-        }).to_string();
-
-        let ts = chrono::Utc::now().timestamp_millis().to_string();
-        let sign_str = format!("{}{}{}", key, &ts, body);
-        let sig = Self::hmac_sha256_hex(secret, &sign_str);
-
-        let resp = reqwest::Client::new()
-            .post("https://contract.mexc.com/api/v1/private/order/submit")
-            .header("ApiKey", key)
-            .header("Request-Time", &ts)
-            .header("Signature", &sig)
-            .header("Content-Type", "application/json")
-            .body(body).send().await.map_err(|e| e.to_string())?;
-
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        if !status.is_success() { return Err(format!("MEXC {}: {}", status, text)); }
-        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-        if parsed.get("success").and_then(|v| v.as_bool()) != Some(true) {
-            return Err(format!("MEXC rejected: {}", text));
-        }
-        info!("   -> MEXC Futures {} {} qty={}", side, sym, qty);
-        Ok(())
-    }
-
-    // ── OKX USDT-Margined Swap ─────────────────────────────────────────────────
-
-    async fn place_okx_futures(
-        &self, key: &str, secret: &str, passphrase: &str,
-        symbol: &str, side: &str, volume_usdt: Decimal, price: Decimal,
-    ) -> Result<(), String> {
-        let inst = format!("{}-USDT-SWAP", symbol);
-        let qty = (volume_usdt / price).round_dp(6);
-        if qty.is_zero() { return Err("qty zero".into()); }
-
-        let okx_side = if side == "BUY" { "buy" } else { "sell" };
-        let pos_side = if side == "BUY" { "long" } else { "short" };
-        let body = serde_json::json!({
-            "instId": inst, "tdMode": "cross",
-            "side": okx_side, "posSide": pos_side,
-            "ordType": "market", "sz": qty.to_string()
-        }).to_string();
-
-        let ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-        let path = "/api/v5/trade/order";
-        let prehash = format!("{}POST{}{}", ts, path, body);
-        let sig = Self::hmac_sha256_b64(secret, &prehash);
-
-        let resp = reqwest::Client::new()
-            .post(format!("https://www.okx.com{}", path))
-            .header("OK-ACCESS-KEY", key)
-            .header("OK-ACCESS-SIGN", sig)
-            .header("OK-ACCESS-TIMESTAMP", &ts)
-            .header("OK-ACCESS-PASSPHRASE", passphrase)
-            .header("Content-Type", "application/json")
-            .body(body).send().await.map_err(|e| e.to_string())?;
-
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        if !status.is_success() { return Err(format!("OKX {}: {}", status, text)); }
-        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-        if parsed.get("code").and_then(|c| c.as_str()) != Some("0") {
-            return Err(format!("OKX rejected: {}", text));
-        }
-        info!("   -> OKX Swap {} {} qty={}", side, inst, qty);
         Ok(())
     }
 
@@ -483,113 +320,6 @@ impl ExecutionActor {
         if !status.is_success() { return Err(format!("Gate {}: {}", status, text)); }
         info!("   -> Gate Futures {} {} size={}", side, contract, size);
         Ok(())
-    }
-
-    // ── Bitmart Contract Futures ───────────────────────────────────────────────
-    // Auth: HMAC-SHA256. Sign: timestamp#memo#body
-
-    async fn place_bitmart_futures(
-        &self, key: &str, secret: &str, memo: &str,
-        symbol: &str, side: &str, volume_usdt: Decimal, price: Decimal,
-    ) -> Result<(), String> {
-        let sym = format!("{}USDT", symbol);
-        let qty = (volume_usdt / price).round_dp(6);
-        if qty.is_zero() { return Err("qty zero".into()); }
-
-        // Bitmart side: 1=buy_open_long, 4=sell_open_short
-        let bm_side = if side == "BUY" { 1u8 } else { 4u8 };
-        let body = serde_json::json!({
-            "symbol": sym, "side": bm_side,
-            "type": "market", "vol": qty.to_string(),
-            "open_type": "cross", "leverage": "1"
-        }).to_string();
-
-        let ts = chrono::Utc::now().timestamp_millis().to_string();
-        let sign_content = format!("{}#{}", ts, body);
-        let sig = Self::hmac_sha256_hex(secret, &sign_content);
-
-        let resp = reqwest::Client::new()
-            .post("https://api-cloud-v2.bitmart.com/contract/private/submit-order")
-            .header("X-BM-KEY", key)
-            .header("X-BM-SIGN", sig)
-            .header("X-BM-TIMESTAMP", &ts)
-            .header("X-BM-BROKER-ID", memo) // memo is used as broker id (optional)
-            .header("Content-Type", "application/json")
-            .body(body).send().await.map_err(|e| e.to_string())?;
-
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        if !status.is_success() { return Err(format!("Bitmart {}: {}", status, text)); }
-        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-        if parsed.get("code").and_then(|c| c.as_i64()) != Some(1000) {
-            return Err(format!("Bitmart rejected: {}", text));
-        }
-        info!("   -> Bitmart Futures {} {} qty={}", side, sym, qty);
-        Ok(())
-    }
-
-    // ── Kraken Derivatives (Perpetual Futures) ─────────────────────────────────
-    // Auth: SHA-256 + HMAC-SHA512 with base64-decoded secret
-
-    async fn place_kraken_futures(
-        &self, key: &str, secret: &str,
-        symbol: &str, side: &str, volume_usdt: Decimal, price: Decimal,
-    ) -> Result<(), String> {
-        use base64::{Engine as _, engine::general_purpose};
-
-        // Kraken futures symbol: PF_XBTUSD style — map our symbol to their format
-        let kraken_sym = Self::to_kraken_futures_symbol(symbol);
-        let qty = (volume_usdt / price).round_dp(0);
-        if qty.is_zero() { return Err("qty zero".into()); }
-
-        let kraken_side = if side == "BUY" { "buy" } else { "sell" };
-        let nonce = chrono::Utc::now().timestamp_millis().to_string();
-        let post_body = format!(
-            "orderType=mkt&symbol={}&side={}&size={}&nonce={}",
-            kraken_sym, kraken_side, qty, nonce
-        );
-        let path = "/derivatives/api/v3/sendorder";
-
-        // Signature: base64(HMAC-SHA512(SHA256(post_body + nonce + path), base64_decode(secret)))
-        let msg = format!("{}{}{}", post_body, nonce, path);
-        let sha256_hash = Sha256::digest(msg.as_bytes());
-        let secret_bytes = general_purpose::STANDARD.decode(secret)
-            .map_err(|e| format!("Kraken secret decode: {}", e))?;
-        let sig = Self::hmac_sha512_b64(&secret_bytes, &sha256_hash);
-
-        let resp = reqwest::Client::new()
-            .post(format!("https://futures.kraken.com{}", path))
-            .header("APIKey", key)
-            .header("Authent", sig)
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(post_body).send().await.map_err(|e| e.to_string())?;
-
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        if !status.is_success() { return Err(format!("Kraken {}: {}", status, text)); }
-        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-        if parsed.get("result").and_then(|r| r.as_str()) != Some("success") {
-            return Err(format!("Kraken rejected: {}", text));
-        }
-        info!("   -> Kraken Futures {} {} qty={}", side, kraken_sym, qty);
-        Ok(())
-    }
-
-    fn to_kraken_futures_symbol(sym: &str) -> String {
-        // Map common symbols to Kraken perpetual format (PF_ prefix for flex perps)
-        match sym {
-            "BTC" | "XBT" => "PF_XBTUSD".to_string(),
-            "ETH"  => "PF_ETHUSD".to_string(),
-            "SOL"  => "PF_SOLUSD".to_string(),
-            "XRP"  => "PF_XRPUSD".to_string(),
-            "DOGE" => "PF_DOGEUSD".to_string(),
-            "LTC"  => "PF_LTCUSD".to_string(),
-            "BCH"  => "PF_BCHUSD".to_string(),
-            "LINK" => "PF_LINKUSD".to_string(),
-            "ADA"  => "PF_ADAUSD".to_string(),
-            "DOT"  => "PF_DOTUSD".to_string(),
-            other  => format!("PF_{}USD", other),
-        }
     }
 
     // ── Hyperliquid USDT Perpetual ─────────────────────────────────────────────
@@ -752,4 +482,130 @@ impl ExecutionActor {
         info!("   -> Hyperliquid Perp {} {} size={}", side, coin, size);
         Ok(())
     }
+
+    // ── Aster V3 EIP‑712 signed order ─────────────────────────────────────────────
+
+    async fn place_aster_v3(
+        &self,
+        private_key: &str,
+        symbol: &str,
+        side: &str,
+        volume_usdt: Decimal,
+        price: Decimal,
+    ) -> Result<(), String> {
+        use k256::ecdsa::{SigningKey, RecoveryId};
+        use sha3::{Keccak256, Digest};
+
+        // 1. Derive signer address from private key
+        let key_bytes = hex::decode(private_key.trim_start_matches("0x"))
+            .map_err(|e| format!("Aster: bad private key: {}", e))?;
+        let signing_key = SigningKey::from_bytes(key_bytes.as_slice().into())
+            .map_err(|e| format!("Aster: invalid key: {}", e))?;
+        let verifying_key = signing_key.verifying_key();
+        let uncompressed = verifying_key.to_sec1_bytes();
+        // Ethereum address = last 20 bytes of keccak256(uncompressed[1..])
+        let hash = Keccak256::digest(&uncompressed[1..]);
+        let signer_address = format!("0x{}", hex::encode(&hash[12..]));
+        let user_address = signer_address.clone(); // assume same for simplicity
+
+        // 2. Build order parameters (market order)
+        let sym = format!("{}USDT", symbol);
+        let qty = (volume_usdt / price).round_dp(6);
+        if qty.is_zero() { return Err("Aster: qty zero".into()); }
+
+        let mut params = vec![
+            ("symbol", sym.clone()),
+            ("side", side.to_uppercase()),
+            ("type", "MARKET".to_string()),
+            ("quantity", qty.to_string()),
+            // timeInForce omitted for MARKET (default IOC)
+        ];
+        // Nonce in microseconds
+        let now_micros = chrono::Utc::now().timestamp_micros();
+        let nonce = now_micros.to_string();
+        params.push(("nonce", nonce.clone()));
+        params.push(("user", user_address));
+        params.push(("signer", signer_address));
+
+        // 3. URL‑encode parameters (sorted? Aster example does not sort)
+        let param_str = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(params.iter().map(|(k, v)| (k, v.as_str())))
+            .finish();
+
+        // 4. EIP‑712 signing hash
+        // Domain type hash
+        let domain_type_hash: [u8; 32] = Keccak256::digest(
+            b"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+        ).into();
+        let name_hash: [u8; 32] = Keccak256::digest(b"AsterSignTransaction").into();
+        let version_hash: [u8; 32] = Keccak256::digest(b"1").into();
+        let mut chain_id = [0u8; 32];
+        // chainId = 1666 (0x682) as big‑endian in last two bytes
+        chain_id[30] = 0x06;
+        chain_id[31] = 0x82;
+        let verifying_contract = [0u8; 32];
+
+        let mut domain_enc = Vec::with_capacity(160);
+        domain_enc.extend_from_slice(&domain_type_hash);
+        domain_enc.extend_from_slice(&name_hash);
+        domain_enc.extend_from_slice(&version_hash);
+        domain_enc.extend_from_slice(&chain_id);
+        domain_enc.extend_from_slice(&verifying_contract);
+        let domain_separator: [u8; 32] = Keccak256::digest(&domain_enc).into();
+
+        // Message type hash
+        let message_type_hash: [u8; 32] = Keccak256::digest(b"Message(string msg)").into();
+        let message_hash: [u8; 32] = Keccak256::digest(param_str.as_bytes()).into();
+
+        let mut struct_enc = Vec::with_capacity(64);
+        struct_enc.extend_from_slice(&message_type_hash);
+        struct_enc.extend_from_slice(&message_hash);
+        let hash_struct: [u8; 32] = Keccak256::digest(&struct_enc).into();
+
+        // Final EIP‑712 hash
+        let mut signing_hash_input = Vec::with_capacity(2 + 32 + 32);
+        signing_hash_input.push(0x19);
+        signing_hash_input.push(0x01);
+        signing_hash_input.extend_from_slice(&domain_separator);
+        signing_hash_input.extend_from_slice(&hash_struct);
+        let signing_hash: [u8; 32] = Keccak256::digest(&signing_hash_input).into();
+
+        // 5. Sign with secp256k1
+        let (sig, recid): (k256::ecdsa::Signature, RecoveryId) = signing_key
+            .sign_prehash_recoverable(&signing_hash)
+            .map_err(|e| format!("Aster: sign error: {}", e))?;
+
+        let sig_r = sig.r().to_bytes();
+        let sig_s = sig.s().to_bytes();
+        let sig_bytes = [&sig_r[..], &sig_s[..], &[recid.to_byte() + 27]].concat();
+        let signature_hex = format!("0x{}", hex::encode(sig_bytes));
+
+        // 6. Construct URL with signature as query parameter
+        let url = format!(
+            "https://fapi.asterdex.com/fapi/v3/order?{}&signature={}",
+            param_str, signature_hex
+        );
+
+        // 7. Send POST request
+        let client = reqwest::Client::new();
+        let resp = client.post(&url)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .send()
+            .await
+            .map_err(|e| format!("Aster: request failed: {}", e))?;
+
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(format!("Aster order failed {}: {}", status, text));
+        }
+        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+        if parsed.get("code").and_then(|c| c.as_i64()) != Some(200) {
+            return Err(format!("Aster order rejected: {}", text));
+        }
+
+    info!("   -> Aster V3 {} {} qty={}", side, sym, qty);
+    Ok(())
+}
+
 }
