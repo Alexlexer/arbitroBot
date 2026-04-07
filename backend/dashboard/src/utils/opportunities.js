@@ -60,8 +60,10 @@ export function calculateSpread(exchanges, botConfig) {
 
 /** Get sorted opportunities from tickers + botConfig (for live). Limit 50. */
 export function getOpportunities(tickers, botConfig, limit = 50) {
+  const blacklist = (botConfig?.symbol_blacklist || []).map(s => s.toUpperCase());
   const grouped = groupBySymbol(tickers);
   const opportunities = Object.entries(grouped)
+    .filter(([symbol]) => !blacklist.includes(symbol.toUpperCase()))
     .map(([symbol, exts]) => {
       const { bestLong, bestShort, spread } = calculateSpread(exts, botConfig);
       return { symbol, bestLong, bestShort, spread, exts };
