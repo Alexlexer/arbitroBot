@@ -895,13 +895,17 @@ impl Aggregator {
     }
 
     async fn broadcast_tickers(&self) {
-        // Flatten market_data into a Vec and send as one message instead of one per update.
-        let tickers: Vec<&crate::model::UnifiedTicker> = self.market_data
-            .values()
-            .flat_map(|m| m.values())
-            .collect();
-        if !tickers.is_empty() {
-            self.broadcast_message("tickers.snapshot", &tickers).await;
+        // Group tickers by exchange and send one batch per exchange.
+        // Keeps individual messages small (~200-500 KB each) vs one giant snapshot.
+        use std::collections::HashMap as HM;
+        let mut by_exchange: HM<String, Vec<&crate::model::UnifiedTicker>> = HM::new();
+        for per_ex in self.market_data.values() {
+            for ticker in per_ex.values() {
+                by_exchange.entry(format!("{:?}", ticker.exchange)).or_default().push(ticker);
+            }
+        }
+        for (exchange, tickers) in &by_exchange {
+            self.broadcast_message(&format!("ticker.{}", exchange), tickers).await;
         }
     }
 
