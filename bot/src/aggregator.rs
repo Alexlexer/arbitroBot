@@ -160,6 +160,7 @@ impl Aggregator {
                     }
                     self.print_arbitrage_matrix();
                     self.check_rebalancing().await;
+                    self.broadcast_tickers().await;
                     self.broadcast_state().await;
                     self.broadcast_config().await;
                 }
@@ -467,10 +468,8 @@ impl Aggregator {
         let symbol = ticker.symbol.clone();
         let entry = self.market_data.entry(symbol.clone()).or_insert_with(HashMap::new);
         entry.insert(ticker.exchange, ticker.clone());
-        
         self.detect_sharps(&symbol).await;
-        
-        self.broadcast_message(&format!("ticker.{}", ticker.exchange), &ticker).await;
+        // Tickers are published in bulk via broadcast_tickers() on each interval tick.
     }
 
     /// Helper: compute VWAP price for given USDT notional on one side of the book.
@@ -892,6 +891,17 @@ impl Aggregator {
             tokio::spawn(async move {
                 n.send_alert(&msg).await;
             });
+        }
+    }
+
+    async fn broadcast_tickers(&self) {
+        // Flatten market_data into a Vec and send as one message instead of one per update.
+        let tickers: Vec<&crate::model::UnifiedTicker> = self.market_data
+            .values()
+            .flat_map(|m| m.values())
+            .collect();
+        if !tickers.is_empty() {
+            self.broadcast_message("tickers.snapshot", &tickers).await;
         }
     }
 

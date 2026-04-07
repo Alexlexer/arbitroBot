@@ -147,13 +147,17 @@ export const useRabbitMQ = () => {
     client.onConnect = () => {
       if (isDev) console.log('Connected to WebStomp');
       setIsConnected(true);
-      // Subscribe to all tickers — bot publishes to arbit_hub exchange with key ticker.{Exchange}
-      client.subscribe('/exchange/arbit_hub/ticker.*', (message) => {
+      // Subscribe to bulk ticker snapshot — bot sends all tickers as one message per interval tick.
+      client.subscribe('/exchange/arbit_hub/tickers.snapshot', (message) => {
         try {
-          const ticker = JSON.parse(message.body);
-          if (!ticker?.symbol || !ticker?.exchange) return;
-          const key = `${ticker.exchange}-${ticker.symbol}`;
-          tickerBatchRef.current[key] = ticker;
+          const snapshot = JSON.parse(message.body);
+          if (!Array.isArray(snapshot)) return;
+          const batch = {};
+          for (const ticker of snapshot) {
+            if (!ticker?.symbol || !ticker?.exchange) continue;
+            batch[`${ticker.exchange}-${ticker.symbol}`] = ticker;
+          }
+          tickerBatchRef.current = { ...tickerBatchRef.current, ...batch };
           if (!batchTimerRef.current) {
             batchTimerRef.current = setInterval(flushTickerBatch, TICKER_BATCH_MS);
           }
