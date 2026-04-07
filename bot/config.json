@@ -23,23 +23,19 @@
   "exchange_endpoints": {
     "Binance": {
       "ws_url": "wss://fstream.binance.com/stream",
-      "rest_url": "https://fapi.binance.com",
-      "max_symbols": 300
+      "rest_url": "https://fapi.binance.com"
     },
     "Bybit": {
       "ws_url": "wss://stream.bybit.com/v5/public/linear",
-      "rest_url": "https://api.bybit.com",
-      "max_symbols": 300
+      "rest_url": "https://api.bybit.com"
     },
     "Gate": {
       "ws_url": "wss://fx-ws.gateio.ws/v4/ws/usdt",
-      "rest_url": "https://fx-api.gateio.ws/api/v4",
-      "max_symbols": 300
+      "rest_url": "https://fx-api.gateio.ws/api/v4"
     },
     "Hyperliquid": {
       "ws_url": "wss://api.hyperliquid.xyz/ws",
       "rest_url": "https://api.hyperliquid.xyz",
-      "max_symbols": 200,
       "ping_interval_secs": 30
     },
     "Aster": {

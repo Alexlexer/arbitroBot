@@ -86,8 +86,8 @@ export function calculateSpread(exchanges, botConfig) {
   return { bestLong, bestShort, spread };
 }
 
-/** Get sorted opportunities from tickers + botConfig (for live). Limit 50. */
-export function getOpportunities(tickers, botConfig, limit = 50) {
+/** Get sorted opportunities from tickers + botConfig (for live). Limit 10. */
+export function getOpportunities(tickers, botConfig, limit = 10) {
   const blacklist = (botConfig?.symbol_blacklist || []).map(s => s.toUpperCase());
   const grouped = groupBySymbol(tickers);
   const opportunities = Object.entries(grouped)
