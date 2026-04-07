@@ -576,7 +576,7 @@ impl Aggregator {
                         let cfg = self.config.lock().unwrap_or_else(|e| e.into_inner());
                         Decimal::try_from(cfg.min_spread_threshold).unwrap_or(Decimal::from(1))
                     };
-                    let max_sanity = Decimal::from(50); // 50% max
+                    let max_sanity = Decimal::from(15); // 15% sanity cap
                     
                     if net_spread >= threshold && net_spread < max_sanity {
                         // Prepare Risk Data

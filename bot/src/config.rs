@@ -50,6 +50,9 @@ pub struct AppConfig {
     /// Symbols to skip entirely (e.g. hacked tokens with fake spreads).
     #[serde(default)]
     pub symbol_blacklist: Vec<String>,
+    /// Minimum 24h trading volume (USDT) required on each exchange leg. 0 = disabled.
+    #[serde(default)]
+    pub min_volume_24h_usdt: Decimal,
     pub wallets: HashMap<ExchangeId, String>,
     /// Per-exchange endpoint and tuning overrides.  Absent keys use launcher defaults.
     #[serde(default)]
@@ -118,6 +121,7 @@ impl AppConfig {
             automated_rebalance_enabled: false,
             live_trading_enabled: false,
             symbol_blacklist: Vec::new(),
+            min_volume_24h_usdt: Decimal::ZERO,
             wallets: HashMap::new(),
             exchange_endpoints,
         }

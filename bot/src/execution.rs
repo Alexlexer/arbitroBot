@@ -1,5 +1,6 @@
 use crate::config::AppConfig;
 use crate::model::{ArbitrageOpportunity, ExchangeId, TradeRecord, TradeStatus};
+use crate::notifier::TelegramNotifier;
 use crate::rate_limiter::RateLimiter;
 use hmac::{Hmac, Mac};
 use sha2::{Sha256, Sha512, Digest};
@@ -49,14 +50,27 @@ const MAX_OPP_AGE_MS: i64 = 2_000;
 const EXEC_SLIPPAGE: f64 = 0.003;
 /// Cooldown (ms) before the same symbol+pair may be traded again, to prevent double-execution.
 const EXEC_DEDUP_MS: i64 = 2_000;
+/// Max simultaneous open trades (legs in-flight).
+const MAX_CONCURRENT_TRADES: usize = 3;
+/// Daily PnL loss limit in USDT. If cumulative realized PnL drops below this, trading halts.
+const DAILY_PNL_LIMIT_USDT: f64 = -200.0;
 
 pub struct ExecutionActor {
     rx: Receiver<ArbitrageOpportunity>,
     rate_limiter: Arc<RateLimiter>,
     config: Arc<std::sync::Mutex<AppConfig>>,
+    notifier: Arc<TelegramNotifier>,
     trade_log: Vec<TradeRecord>,
     /// (symbol-long_ex-short_ex) -> last execution timestamp ms
     recent_executions: std::collections::HashMap<String, i64>,
+    /// Number of currently in-flight trades.
+    open_trades: usize,
+    /// Cumulative realized PnL for today (reset at UTC midnight).
+    daily_pnl: Decimal,
+    /// UTC date of last reset (YYYY-MM-DD).
+    daily_pnl_date: chrono::NaiveDate,
+    /// If true, trading is halted due to daily loss limit.
+    circuit_open: bool,
 }
 
 impl ExecutionActor {
@@ -64,8 +78,17 @@ impl ExecutionActor {
         rx: Receiver<ArbitrageOpportunity>,
         rate_limiter: Arc<RateLimiter>,
         config: Arc<std::sync::Mutex<AppConfig>>,
+        notifier: Arc<TelegramNotifier>,
     ) -> Self {
-        Self { rx, rate_limiter, config, trade_log: Vec::new(), recent_executions: std::collections::HashMap::new() }
+        Self {
+            rx, rate_limiter, config, notifier,
+            trade_log: Vec::new(),
+            recent_executions: std::collections::HashMap::new(),
+            open_trades: 0,
+            daily_pnl: Decimal::ZERO,
+            daily_pnl_date: chrono::Utc::now().date_naive(),
+            circuit_open: false,
+        }
     }
 
     pub async fn run(&mut self) {
@@ -77,6 +100,27 @@ impl ExecutionActor {
     }
 
     async fn execute_opportunity(&mut self, opp: ArbitrageOpportunity, live: bool) {
+        // 0. Reset daily PnL counter at UTC midnight.
+        let today = chrono::Utc::now().date_naive();
+        if today != self.daily_pnl_date {
+            info!("Daily PnL reset. Yesterday: ${:.2}", self.daily_pnl);
+            self.daily_pnl = Decimal::ZERO;
+            self.daily_pnl_date = today;
+            self.circuit_open = false;
+        }
+
+        // 0b. Circuit breaker: halt if daily loss exceeded.
+        if self.circuit_open {
+            warn!("CIRCUIT OPEN: trading halted (daily PnL ${:.2} < limit ${})", self.daily_pnl, DAILY_PNL_LIMIT_USDT);
+            return;
+        }
+
+        // 0c. Concurrent position limit.
+        if self.open_trades >= MAX_CONCURRENT_TRADES {
+            warn!("SKIP {}: max concurrent trades ({}) reached", opp.symbol, MAX_CONCURRENT_TRADES);
+            return;
+        }
+
         // 1. Discard stale opportunities (price may have moved while queued).
         let now_ms = chrono::Utc::now().timestamp_millis();
         let age_ms = now_ms - opp._timestamp;
@@ -116,32 +160,74 @@ impl ExecutionActor {
         let trade_id = format!("{}_{}_{}", opp.symbol, opp.long_exchange, chrono::Utc::now().timestamp_millis());
 
         if live {
+            self.open_trades += 1;
             let (long_res, short_res) = tokio::join!(
                 self.place_order_live(&opp, opp.long_exchange, "BUY",  opp.long_price,  opp.volume_usdt),
                 self.place_order_live(&opp, opp.short_exchange, "SELL", opp.short_price, opp.volume_usdt),
             );
+            self.open_trades = self.open_trades.saturating_sub(1);
 
-            // Rollback on partial fill
+            // Rollback on partial fill + Telegram alert
             if long_res.is_ok() && short_res.is_err() {
                 warn!("ROLLBACK: Short failed on {}, reversing long on {}", opp.short_exchange, opp.long_exchange);
+                self.notifier.send_alert(&format!(
+                    "⚠️ *ROLLBACK* [{sym}]\nShort on {short} failed — reversing long on {long}.\nError: {err}",
+                    sym = opp.symbol, short = opp.short_exchange, long = opp.long_exchange,
+                    err = short_res.as_ref().unwrap_err(),
+                )).await;
                 let rev = self.place_order_live(&opp, opp.long_exchange, "SELL", opp.long_price, opp.volume_usdt).await;
-                if let Err(e) = rev { error!("ROLLBACK FAILED on {}: {} — MANUAL INTERVENTION REQUIRED", opp.long_exchange, e); }
+                if let Err(e) = rev {
+                    error!("ROLLBACK FAILED on {}: {} — MANUAL INTERVENTION REQUIRED", opp.long_exchange, e);
+                    self.notifier.send_alert(&format!(
+                        "🚨 *ROLLBACK FAILED* [{sym}]\nCould not reverse long on {long}!\nError: {err}\n*MANUAL INTERVENTION REQUIRED*",
+                        sym = opp.symbol, long = opp.long_exchange, err = e,
+                    )).await;
+                }
             } else if long_res.is_err() && short_res.is_ok() {
                 warn!("ROLLBACK: Long failed on {}, reversing short on {}", opp.long_exchange, opp.short_exchange);
+                self.notifier.send_alert(&format!(
+                    "⚠️ *ROLLBACK* [{sym}]\nLong on {long} failed — reversing short on {short}.\nError: {err}",
+                    sym = opp.symbol, long = opp.long_exchange, short = opp.short_exchange,
+                    err = long_res.as_ref().unwrap_err(),
+                )).await;
                 let rev = self.place_order_live(&opp, opp.short_exchange, "BUY", opp.short_price, opp.volume_usdt).await;
-                if let Err(e) = rev { error!("ROLLBACK FAILED on {}: {} — MANUAL INTERVENTION REQUIRED", opp.short_exchange, e); }
+                if let Err(e) = rev {
+                    error!("ROLLBACK FAILED on {}: {} — MANUAL INTERVENTION REQUIRED", opp.short_exchange, e);
+                    self.notifier.send_alert(&format!(
+                        "🚨 *ROLLBACK FAILED* [{sym}]\nCould not reverse short on {short}!\nError: {err}\n*MANUAL INTERVENTION REQUIRED*",
+                        sym = opp.symbol, short = opp.short_exchange, err = e,
+                    )).await;
+                }
             }
 
             let pnl = if long_res.is_ok() && short_res.is_ok() {
                 Some(opp.volume_usdt * opp.spread_pct / Decimal::from(100))
             } else { None };
 
+            // Update daily PnL and check circuit breaker.
+            if let Some(p) = pnl {
+                self.daily_pnl += p;
+                info!("TRADE PnL [{}]: est ${:.4} USDT | daily: ${:.2}", trade_id, p, self.daily_pnl);
+                let limit = Decimal::try_from(DAILY_PNL_LIMIT_USDT).unwrap_or(Decimal::from(-200));
+                if self.daily_pnl < limit && !self.circuit_open {
+                    self.circuit_open = true;
+                    error!("CIRCUIT BREAKER: daily PnL ${:.2} below limit ${}. Trading HALTED.", self.daily_pnl, DAILY_PNL_LIMIT_USDT);
+                    self.notifier.send_alert(&format!(
+                        "🛑 *CIRCUIT BREAKER TRIGGERED*\nDaily PnL: `${:.2} USDT`\nLimit: `${} USDT`\nTrading halted until UTC midnight.",
+                        self.daily_pnl, DAILY_PNL_LIMIT_USDT,
+                    )).await;
+                    // Disable live trading in config.
+                    if let Ok(mut cfg) = self.config.lock() {
+                        cfg.live_trading_enabled = false;
+                    }
+                }
+            }
+
             let long_status  = match &long_res  { Ok(_) => TradeStatus::Filled, Err(e) => TradeStatus::Failed(e.clone()) };
             let short_status = match &short_res { Ok(_) => TradeStatus::Filled, Err(e) => TradeStatus::Failed(e.clone()) };
 
             if let Err(e) = &long_res  { error!("Long  order failed: {}", e); }
             if let Err(e) = &short_res { error!("Short order failed: {}", e); }
-            if let Some(p) = pnl { info!("TRADE PnL [{}]: est ${:.4} USDT", trade_id, p); }
 
             self.push_record(TradeRecord {
                 id: trade_id, symbol: opp.symbol,

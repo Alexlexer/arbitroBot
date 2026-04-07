@@ -148,7 +148,7 @@ async fn main() {
     exchange::launch_all(tx, &config_snap).await;
 
     // Run Execution Actor (Background Thread)
-    let mut execution_actor = ExecutionActor::new(exec_rx, rate_limiter.clone(), config.clone());
+    let mut execution_actor = ExecutionActor::new(exec_rx, rate_limiter.clone(), config.clone(), notifier.clone());
     tokio::spawn(async move {
         execution_actor.run().await;
     });

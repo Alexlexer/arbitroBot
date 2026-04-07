@@ -110,6 +110,9 @@ impl RiskManager {
         // 7. Check Funding Rate
         self.check_funding(opp, funding_map)?;
 
+        // 8. Check 24h Volume Minimum
+        self.check_volume_24h(opp, market_filters)?;
+
         Ok(())
     }
 
@@ -313,6 +316,33 @@ impl RiskManager {
             }
         }
 
+        Ok(())
+    }
+
+    /// 24h Volume Filter: skip low-liquidity symbols that may have manipulated spreads.
+    fn check_volume_24h(
+        &self,
+        opp: &ArbitrageOpportunity,
+        market_filters: &HashMap<ExchangeId, HashMap<String, crate::model::SymbolMarketFilters>>,
+    ) -> Result<(), RiskError> {
+        let min_vol = {
+            let cfg = self.config.lock().unwrap_or_else(|e| e.into_inner());
+            cfg.min_volume_24h_usdt
+        };
+        if min_vol.is_zero() { return Ok(()); }
+
+        for eid in &[opp.long_exchange, opp.short_exchange] {
+            if let Some(exchange_filters) = market_filters.get(eid) {
+                if let Some(filter) = exchange_filters.get(&opp.symbol) {
+                    if filter.volume_24h_usdt > Decimal::ZERO && filter.volume_24h_usdt < min_vol {
+                        return Err(RiskError::LowLiquidity(format!(
+                            "{} {} 24h vol ${:.0} < min ${:.0}",
+                            eid, opp.symbol, filter.volume_24h_usdt, min_vol
+                        )));
+                    }
+                }
+            }
+        }
         Ok(())
     }
 

@@ -51,22 +51,42 @@ impl DataPoller {
             let mut new_rates = HashMap::new();
             let mut new_filters = HashMap::new();
 
-            // 1. Fetch Binance Info & Funding
+            // 1. Fetch Binance Info & Funding & Volumes
             if self.rate_limiter.check_limit(ExchangeId::Binance, false, 2.0).await {
-                if let Ok(filters) = self.fetch_binance_filters().await {
-                    new_filters.insert(ExchangeId::Binance, filters);
+                let mut binance_filters = self.fetch_binance_filters().await.ok();
+                let binance_vols = self.fetch_binance_volumes().await.ok();
+                let binance_funding = self.fetch_binance_funding().await.ok();
+                if let Some(ref mut filters) = binance_filters {
+                    if let Some(vols) = binance_vols {
+                        for (sym, f) in filters.iter_mut() {
+                            if let Some(&vol) = vols.get(sym) {
+                                f.volume_24h_usdt = vol;
+                            }
+                        }
+                    }
+                    new_filters.insert(ExchangeId::Binance, binance_filters.unwrap());
                 }
-                if let Ok(rates) = self.fetch_binance_funding().await {
+                if let Some(rates) = binance_funding {
                     new_rates.insert(ExchangeId::Binance, rates);
                 }
             }
 
-            // 2. Fetch Bybit Info & Funding
+            // 2. Fetch Bybit Info & Funding & Volumes
             if self.rate_limiter.check_limit(ExchangeId::Bybit, false, 2.0).await {
-                if let Ok(filters) = self.fetch_bybit_filters().await {
-                    new_filters.insert(ExchangeId::Bybit, filters);
+                let mut bybit_filters = self.fetch_bybit_filters().await.ok();
+                let bybit_vols = self.fetch_bybit_volumes().await.ok();
+                let bybit_funding = self.fetch_bybit_funding().await.ok();
+                if let Some(ref mut filters) = bybit_filters {
+                    if let Some(vols) = bybit_vols {
+                        for (sym, f) in filters.iter_mut() {
+                            if let Some(&vol) = vols.get(sym) {
+                                f.volume_24h_usdt = vol;
+                            }
+                        }
+                    }
+                    new_filters.insert(ExchangeId::Bybit, bybit_filters.unwrap());
                 }
-                if let Ok(rates) = self.fetch_bybit_funding().await {
+                if let Some(rates) = bybit_funding {
                     new_rates.insert(ExchangeId::Bybit, rates);
                 }
             }
@@ -114,9 +134,10 @@ impl DataPoller {
                         if f["filterType"] == "NOTIONAL" || f["filterType"] == "MIN_NOTIONAL" {
                             let min_notional_str = f["minNotional"].as_str().or(f["notional"].as_str()).unwrap_or("0");
                             if let Ok(val) = Decimal::from_str(min_notional_str) {
-                                map.insert(symbol_name.clone(), crate::model::SymbolMarketFilters { 
+                                map.insert(symbol_name.clone(), crate::model::SymbolMarketFilters {
                                     min_notional: val,
                                     is_trading,
+                                    volume_24h_usdt: Decimal::ZERO,
                                 });
                             }
                         }
@@ -139,9 +160,10 @@ impl DataPoller {
                     let is_trading = item["status"].as_str() == Some("Trading");
                     let min_notional = item["minNotionalValue"].as_str().unwrap_or("0");
                     if let Ok(val) = Decimal::from_str(min_notional) {
-                        map.insert(symbol_name, crate::model::SymbolMarketFilters { 
+                        map.insert(symbol_name, crate::model::SymbolMarketFilters {
                             min_notional: val,
                             is_trading,
+                            volume_24h_usdt: Decimal::ZERO,
                         });
                     }
                 }
@@ -365,11 +387,46 @@ impl DataPoller {
             if let Some(arr) = json.as_array() {
                 for item in arr {
                     let symbol = crate::model::normalize_symbol(item["name"].as_str().unwrap_or(item["id"].as_str().unwrap_or("")));
-                    map.insert(symbol, crate::model::SymbolMarketFilters { min_notional: Decimal::from(1), is_trading: true });
+                    map.insert(symbol, crate::model::SymbolMarketFilters { min_notional: Decimal::from(1), is_trading: true, volume_24h_usdt: Decimal::ZERO });
                 }
             }
         }
 
+        Ok(map)
+    }
+
+    /// Returns symbol -> 24h quote volume (USDT) for Binance futures.
+    async fn fetch_binance_volumes(&self) -> Result<HashMap<String, Decimal>, Box<dyn std::error::Error>> {
+        let resp = self.client.get("https://fapi.binance.com/fapi/v1/ticker/24hr").send().await?;
+        let json: serde_json::Value = resp.json().await?;
+        let mut map = HashMap::new();
+        if let Some(arr) = json.as_array() {
+            for item in arr {
+                if let (Some(sym), Some(vol_str)) = (item["symbol"].as_str(), item["quoteVolume"].as_str()) {
+                    if let Ok(vol) = Decimal::from_str(vol_str) {
+                        map.insert(crate::model::normalize_symbol(sym), vol);
+                    }
+                }
+            }
+        }
+        Ok(map)
+    }
+
+    /// Returns symbol -> 24h turnover (USDT) for Bybit linear futures.
+    async fn fetch_bybit_volumes(&self) -> Result<HashMap<String, Decimal>, Box<dyn std::error::Error>> {
+        let resp = self.client.get("https://api.bybit.com/v5/market/tickers?category=linear").send().await?;
+        let json: serde_json::Value = resp.json().await?;
+        let mut map = HashMap::new();
+        if let Some(list) = json["result"]["list"].as_array() {
+            for item in list {
+                if let Some(sym) = item["symbol"].as_str() {
+                    let vol_str = item["turnover24h"].as_str().unwrap_or("0");
+                    if let Ok(vol) = Decimal::from_str(vol_str) {
+                        map.insert(crate::model::normalize_symbol(sym), vol);
+                    }
+                }
+            }
+        }
         Ok(map)
     }
 
