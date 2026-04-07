@@ -72,6 +72,24 @@ export function getOpportunities(tickers, botConfig, limit = 50) {
   return opportunities.slice(0, limit);
 }
 
+/**
+ * Compute available USDT depth at the best ask (long leg) and best bid (short leg).
+ * Returns the min of the two — i.e. the max tradeable size at this spread.
+ */
+export function availableDepthUsdt(bestLong, bestShort, limitUsdt = 5000) {
+  let longDepth = 0;
+  for (const [price, qty] of (bestLong?.asks || [])) {
+    longDepth += parseFloat(price) * parseFloat(qty);
+    if (longDepth >= limitUsdt) break;
+  }
+  let shortDepth = 0;
+  for (const [price, qty] of (bestShort?.bids || [])) {
+    shortDepth += parseFloat(price) * parseFloat(qty);
+    if (shortDepth >= limitUsdt) break;
+  }
+  return Math.min(longDepth, shortDepth);
+}
+
 /** Serialize one opportunity for history storage. */
 export function serializeOpportunity(opp) {
   return {

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useRabbitMQ } from './hooks/useRabbitMQ';
 import ArbitrageMatrix from './components/ArbitrageMatrix';
 import AccountSummary from './components/AccountSummary';
+import BotConfig from './components/BotConfig';
 import SettingsPanel from './components/SettingsPanel';
 import HistoryView from './components/HistoryView';
 import ListenerWatch from './components/ListenerWatch';
@@ -97,6 +98,7 @@ function Dashboard({ user, activeView, setActiveView, onLogout }) {
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
             <aside className="lg:col-span-4 flex flex-col gap-8">
               <AccountSummary state={accountState} isConnected={isConnected} />
+              {botConfig && <BotConfig config={botConfig} onCommand={sendBotCommand} />}
             </aside>
             <section className="lg:col-span-8">
               <ArbitrageMatrix tickers={tickers} botConfig={botConfig} />

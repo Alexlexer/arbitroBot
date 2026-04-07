@@ -1,7 +1,7 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Zap, TrendingUp, TrendingDown } from 'lucide-react';
-import { getOpportunities } from '../utils/opportunities';
+import { getOpportunities, availableDepthUsdt } from '../utils/opportunities';
 
 const ArbitrageMatrix = ({ tickers, botConfig }) => {
     const opportunities = getOpportunities(tickers, botConfig);
@@ -32,12 +32,16 @@ const ArbitrageMatrix = ({ tickers, botConfig }) => {
                                 <th className="pb-3 px-3">Symbol</th>
                                 <th className="pb-3 px-3">Long</th>
                                 <th className="pb-3 px-3">Short</th>
+                                <th className="pb-3 px-3 text-right">Depth</th>
                                 <th className="pb-3 px-3 text-right">Spread</th>
                             </tr>
                         </thead>
                         <tbody>
                             <AnimatePresence mode="popLayout">
-                                {opportunities.map(({ symbol, bestLong, bestShort, spread }) => (
+                                {opportunities.map(({ symbol, bestLong, bestShort, spread }) => {
+                                  const depth = availableDepthUsdt(bestLong, bestShort, botConfig?.depth_usdt ?? 5000);
+                                  const depthLabel = depth >= 1000 ? `$${(depth / 1000).toFixed(1)}k` : `$${depth.toFixed(0)}`;
+                                  return (
                                     <motion.tr
                                         key={symbol}
                                         layout
@@ -62,6 +66,15 @@ const ArbitrageMatrix = ({ tickers, botConfig }) => {
                                             </div>
                                         </td>
                                         <td className="py-3 px-3 text-right">
+                                            <span className={`font-mono text-xs font-bold ${
+                                                depth >= (botConfig?.depth_usdt ?? 1000)
+                                                    ? 'text-white'
+                                                    : 'text-zinc-500'
+                                            }`}>
+                                                {depthLabel}
+                                            </span>
+                                        </td>
+                                        <td className="py-3 px-3 text-right">
                                             <span className={`inline-flex items-center gap-1 font-mono text-xs font-bold px-2 py-1 rounded-md border ${
                                                 spread > 0
                                                     ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
@@ -72,7 +85,8 @@ const ArbitrageMatrix = ({ tickers, botConfig }) => {
                                             </span>
                                         </td>
                                     </motion.tr>
-                                ))}
+                                  );
+                                })}
                             </AnimatePresence>
                         </tbody>
                     </table>
