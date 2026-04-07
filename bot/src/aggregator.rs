@@ -895,13 +895,23 @@ impl Aggregator {
     }
 
     async fn broadcast_tickers(&self) {
-        // Group tickers by exchange and send one batch per exchange.
-        // Keeps individual messages small (~200-500 KB each) vs one giant snapshot.
+        // Only publish tickers for symbols present on 2+ exchanges — these are
+        // the only ones relevant for arbitrage. Keeps payload small (~30-50 KB).
         use std::collections::HashMap as HM;
+        let multi_exchange_symbols: Vec<&String> = self.market_data
+            .iter()
+            .filter(|(_, per_ex)| per_ex.len() >= 2)
+            .map(|(sym, _)| sym)
+            .collect();
+
+        if multi_exchange_symbols.is_empty() { return; }
+
         let mut by_exchange: HM<String, Vec<&crate::model::UnifiedTicker>> = HM::new();
-        for per_ex in self.market_data.values() {
-            for ticker in per_ex.values() {
-                by_exchange.entry(format!("{:?}", ticker.exchange)).or_default().push(ticker);
+        for sym in &multi_exchange_symbols {
+            if let Some(per_ex) = self.market_data.get(*sym) {
+                for ticker in per_ex.values() {
+                    by_exchange.entry(format!("{:?}", ticker.exchange)).or_default().push(ticker);
+                }
             }
         }
         for (exchange, tickers) in &by_exchange {
