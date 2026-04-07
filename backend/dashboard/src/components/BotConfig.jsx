@@ -214,7 +214,7 @@ const BotConfig = ({ config, onCommand }) => {
         <div>
           <label className="text-[10px] font-bold uppercase text-white/60 mb-3 block">Active Exchanges</label>
           <div className="grid grid-cols-2 gap-2">
-            {Object.keys(config.enabled_exchanges).map((ex) => (
+            {Object.keys(config.enabled_exchanges || {}).map((ex) => (
               <button
                 key={ex}
                 onClick={() => handleToggle(ex)}

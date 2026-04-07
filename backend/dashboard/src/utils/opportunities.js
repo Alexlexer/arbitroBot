@@ -35,7 +35,7 @@ export function exchangeKey(ex) {
 
 /** Group tickers by symbol. */
 export function groupBySymbol(tickers) {
-  return Object.values(tickers).reduce((acc, t) => {
+  return Object.values(tickers || {}).reduce((acc, t) => {
     if (!acc[t.symbol]) acc[t.symbol] = [];
     acc[t.symbol].push(t);
     return acc;
