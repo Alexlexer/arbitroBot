@@ -1,7 +1,7 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Zap, TrendingUp, TrendingDown } from 'lucide-react';
-import { getOpportunities, availableDepthUsdt } from '../utils/opportunities';
+import { getOpportunities, availableDepthUsdt, takerFee } from '../utils/opportunities';
 
 const ArbitrageMatrix = ({ tickers, botConfig }) => {
     const opportunities = getOpportunities(tickers, botConfig);
@@ -33,14 +33,19 @@ const ArbitrageMatrix = ({ tickers, botConfig }) => {
                                 <th className="pb-3 px-3">Long</th>
                                 <th className="pb-3 px-3">Short</th>
                                 <th className="pb-3 px-3 text-right">Depth</th>
-                                <th className="pb-3 px-3 text-right">Spread</th>
+                                <th className="pb-3 px-3 text-right">Gross → Fees → Net</th>
                             </tr>
                         </thead>
                         <tbody>
                             <AnimatePresence mode="popLayout">
-                                {opportunities.map(({ symbol, bestLong, bestShort, spread }) => {
+                                {opportunities.map(({ symbol, bestLong, bestShort, spread, net }) => {
                                   const depth = availableDepthUsdt(bestLong, bestShort, botConfig?.depth_usdt ?? 5000);
                                   const depthLabel = depth >= 1000 ? `$${(depth / 1000).toFixed(1)}k` : `$${depth.toFixed(0)}`;
+                                  const feeL = takerFee(bestLong.exchange, botConfig);
+                                  const feeS = takerFee(bestShort.exchange, botConfig);
+                                  const totalFeesPct = (feeL + feeS) * 2 * 100;
+                                  const isProfitable = net > 0;
+
                                   return (
                                     <motion.tr
                                         key={symbol}
@@ -75,14 +80,20 @@ const ArbitrageMatrix = ({ tickers, botConfig }) => {
                                             </span>
                                         </td>
                                         <td className="py-3 px-3 text-right">
-                                            <span className={`inline-flex items-center gap-1 font-mono text-xs font-bold px-2 py-1 rounded-md border ${
-                                                spread > 0
-                                                    ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
-                                                    : 'text-zinc-400 bg-white/5 border-white/10'
-                                            }`}>
-                                                {spread > 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                                                {spread.toFixed(3)}%
-                                            </span>
+                                            <div className="flex items-center justify-end gap-1.5 font-mono text-xs">
+                                                <span className="text-zinc-400">{spread.toFixed(3)}%</span>
+                                                <span className="text-zinc-600">−</span>
+                                                <span className="text-zinc-500">{totalFeesPct.toFixed(3)}%</span>
+                                                <span className="text-zinc-600">=</span>
+                                                <span className={`font-bold px-1.5 py-0.5 rounded border ${
+                                                    isProfitable
+                                                        ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+                                                        : 'text-zinc-500 bg-white/5 border-white/10'
+                                                }`}>
+                                                    {isProfitable ? <TrendingUp className="w-3 h-3 inline mr-0.5" /> : <TrendingDown className="w-3 h-3 inline mr-0.5" />}
+                                                    {net.toFixed(3)}%
+                                                </span>
+                                            </div>
                                         </td>
                                     </motion.tr>
                                   );

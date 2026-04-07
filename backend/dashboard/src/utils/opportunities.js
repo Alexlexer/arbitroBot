@@ -1,3 +1,31 @@
+/** Default taker fees per exchange (as fraction, e.g. 0.0005 = 0.05%). Mirrors model.rs ExchangeId::taker_fee(). */
+const DEFAULT_FEES = {
+  binance:     0.0005,
+  bybit:       0.0006,
+  gate:        0.0005,
+  hyperliquid: 0.00035,
+  aster:       0.0005,
+};
+
+/** Taker fee for an exchange, checking botConfig overrides first. */
+export function takerFee(exchangeName, botConfig) {
+  const key = (exchangeName || '').toLowerCase();
+  const overrides = botConfig?.taker_fee_overrides || {};
+  // overrides keys are ExchangeId enum names (e.g. "Binance", "Bybit")
+  const overrideKey = Object.keys(overrides).find(k => k.toLowerCase() === key);
+  return overrideKey != null ? parseFloat(overrides[overrideKey]) : (DEFAULT_FEES[key] ?? 0.0005);
+}
+
+/**
+ * Net spread after fees (both legs, open+close = 2 round-trips total).
+ * net% = gross% - (fee_long + fee_short) * 2 * 100
+ */
+export function netSpread(grossSpreadPct, longExchange, shortExchange, botConfig) {
+  const feeLong  = takerFee(longExchange,  botConfig);
+  const feeShort = takerFee(shortExchange, botConfig);
+  return grossSpreadPct - (feeLong + feeShort) * 2 * 100;
+}
+
 /** Normalize exchange key for lookup (backend may send "Binance", "Bybit", "Gate", "Hyperliquid", "Aster"). */
 export function exchangeKey(ex) {
   if (ex == null) return '';
@@ -66,7 +94,10 @@ export function getOpportunities(tickers, botConfig, limit = 50) {
     .filter(([symbol]) => !blacklist.includes(symbol.toUpperCase()))
     .map(([symbol, exts]) => {
       const { bestLong, bestShort, spread } = calculateSpread(exts, botConfig);
-      return { symbol, bestLong, bestShort, spread, exts };
+      const net = bestLong && bestShort
+        ? netSpread(spread, bestLong.exchange, bestShort.exchange, botConfig)
+        : spread;
+      return { symbol, bestLong, bestShort, spread, net, exts };
     })
     .filter(opp => {
       if (!opp.bestLong || !opp.bestShort) return false;
@@ -78,7 +109,7 @@ export function getOpportunities(tickers, botConfig, limit = 50) {
       return true;
     });
 
-  opportunities.sort((a, b) => b.spread - a.spread);
+  opportunities.sort((a, b) => b.net - a.net);
   return opportunities.slice(0, limit);
 }
 
