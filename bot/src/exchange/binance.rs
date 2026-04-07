@@ -50,11 +50,11 @@ impl Exchange for BinanceLauncher {
                 }
             };
             let symbols: Vec<String> = symbols.into_iter().take(max_symbols).collect();
-            info!("Binance: subscribing to depth5 for {} symbols", symbols.len());
+            info!("Binance: subscribing to depth20 for {} symbols", symbols.len());
 
             let stream_path = symbols
                 .iter()
-                .map(|s| format!("{}@depth5@100ms", s.to_lowercase()))
+                .map(|s| format!("{}@depth20@100ms", s.to_lowercase()))
                 .collect::<Vec<_>>()
                 .join("/");
             let url_str = format!("{}?streams={}", ws_base, stream_path);
@@ -67,11 +67,11 @@ impl Exchange for BinanceLauncher {
             };
 
             loop {
-                info!("Connecting to Binance Futures (depth5)...");
+                info!("Connecting to Binance Futures (depth20)...");
                 match connect_async(url.clone()).await {
                     Ok((ws_stream, _)) => {
                         reconnect_attempt = 0;
-                        info!("Connected to Binance Futures depth5.");
+                        info!("Connected to Binance Futures depth20.");
                         let (_, mut read) = ws_stream.split();
 
                         while let Some(msg) = read.next().await {

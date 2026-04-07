@@ -68,7 +68,7 @@ impl Exchange for AsterLauncher {
             loop {
                 let mut any_success = false;
                 for sym in &symbols {
-                    match client.get(format!("{}/v1/orderbook?symbol={}&depth=5", rest_url, sym)).send().await {
+                    match client.get(format!("{}/v1/orderbook?symbol={}&depth=20", rest_url, sym)).send().await {
                         Ok(resp) => {
                             if let Ok(json) = resp.json::<serde_json::Value>().await {
                                 if let Some(ticker) = parse_orderbook(&json, sym) {

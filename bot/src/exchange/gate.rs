@@ -87,7 +87,7 @@ impl Exchange for GateLauncher {
                                     "time": now,
                                     "channel": "futures.order_book",
                                     "event": "subscribe",
-                                    "payload": [contract, "5", "0"]
+                                    "payload": [contract, "20", "0"]
                                 });
                                 let mut w = write.lock().await;
                                 if let Err(e) = w.send(Message::Text(sub_msg.to_string())).await {
