@@ -550,15 +550,13 @@ impl Aggregator {
                     if b_long.0 < floor || b_short.0 < floor { return; }
 
                     let price_ratio = if b_long.0 > b_short.0 { b_long.0 / b_short.0 } else { b_short.0 / b_long.0 };
-                    if price_ratio > Decimal::from(11) { 
-                        info!("REJECT {}: Price ratio too high ({:.2}x)", symbol, price_ratio);
-                        return; 
+                    if price_ratio > Decimal::from(11) {
+                        return;
                     }
 
                     // Freshness Check: ignore if data is older than threshold
                     let now = chrono::Utc::now().timestamp_millis();
                     if now - long.timestamp > TICKER_STALE_MS || now - short.timestamp > TICKER_STALE_MS {
-                        info!("REJECT {}: Stale data (L: {}ms, S: {}ms ago)", symbol, now - long.timestamp, now - short.timestamp);
                         return;
                     }
 
