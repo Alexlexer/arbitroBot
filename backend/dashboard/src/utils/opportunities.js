@@ -68,7 +68,15 @@ export function getOpportunities(tickers, botConfig, limit = 50) {
       const { bestLong, bestShort, spread } = calculateSpread(exts, botConfig);
       return { symbol, bestLong, bestShort, spread, exts };
     })
-    .filter(opp => opp.bestLong && opp.bestShort);
+    .filter(opp => {
+      if (!opp.bestLong || !opp.bestShort) return false;
+      const minDepth = botConfig?.depth_usdt ?? 0;
+      if (minDepth > 0) {
+        const depth = availableDepthUsdt(opp.bestLong, opp.bestShort, minDepth * 2);
+        if (depth < minDepth) return false;
+      }
+      return true;
+    });
 
   opportunities.sort((a, b) => b.spread - a.spread);
   return opportunities.slice(0, limit);
