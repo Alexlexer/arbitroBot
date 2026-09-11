@@ -6,3 +6,9 @@
 /data/*
 !/data/.gitkeep
 .aider*
+
+# Local credentials at any directory depth; commit templates only.
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.sample
